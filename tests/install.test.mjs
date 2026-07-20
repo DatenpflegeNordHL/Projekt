@@ -119,6 +119,7 @@ test("native controlled launcher preserves stdin and strips unrelated secrets", 
       result.controlledCodex,
       [
         "exec",
+        "--ephemeral",
         "--sandbox", "workspace-write",
         "-c", 'model="openai/gpt-5.6-terra"',
         "-c", "model_reasoning_effort=medium",
@@ -135,6 +136,7 @@ test("native controlled launcher preserves stdin and strips unrelated secrets", 
     assert.equal(readFileSync(join(fixture.project, "codex-stdin.txt"), "utf8"), "bounded task prompt");
     const forwarded = readFileSync(join(fixture.project, "codex-args.txt"), "utf8");
     assert.match(forwarded, /^exec\n/);
+    assert.match(forwarded, /--ephemeral/);
     assert.match(forwarded, /model="openai\/gpt-5\.6-terra"/);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
