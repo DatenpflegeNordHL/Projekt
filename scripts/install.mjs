@@ -3,6 +3,7 @@ import {
   chmodSync,
   constants,
   mkdirSync,
+  readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -27,6 +28,7 @@ const ALLOWED_ARGUMENTS = new Set([
   "--review-reasoning",
 ]);
 const MODEL_ID = /^[a-z0-9._-]+\/[a-z0-9._-]+$/i;
+const LOCAL_GIT_EXCLUDES = [".codexlooper/", ".ralphex/"];
 
 function fail(message) {
   throw new Error(message);
@@ -115,6 +117,24 @@ function writeAtomic(path, content, mode = 0o600) {
   }
 }
 
+function ensureLocalGitExcludes(project) {
+  const excludePath = resolve(
+    project,
+    run("/usr/bin/git", ["rev-parse", "--git-path", "info/exclude"], project, "Git exclude path check"),
+  );
+  let existing = "";
+  try {
+    existing = readFileSync(excludePath, "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const present = new Set(existing.split(/\r?\n/).map((line) => line.trim()));
+  const missing = LOCAL_GIT_EXCLUDES.filter((entry) => !present.has(entry));
+  if (missing.length === 0) return;
+  const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+  writeAtomic(excludePath, `${existing}${prefix}${missing.join("\n")}\n`, 0o600);
+}
+
 function wrapperScript({ realCodex, codexHome, allowedModels, builderModel, reviewModel, builderReasoning, reviewReasoning, entrypoint }) {
   return `#!/bin/sh\nset -eu\nexport CODEXLOOPER_REAL_CODEX=${shellQuote(realCodex)}\nexport CODEX_HOME=${shellQuote(codexHome)}\nexport CODEXLOOPER_ALLOWED_MODELS=${shellQuote(allowedModels)}\nexport CODEXLOOPER_BUILDER_MODEL=${shellQuote(builderModel)}\nexport CODEXLOOPER_REVIEW_MODEL=${shellQuote(reviewModel)}\nexport CODEXLOOPER_BUILDER_REASONING=${shellQuote(builderReasoning)}\nexport CODEXLOOPER_REVIEW_REASONING=${shellQuote(reviewReasoning)}\nexec ${shellQuote(process.execPath)} ${shellQuote(entrypoint)} "$@"\n`;
 }
@@ -157,6 +177,8 @@ export function install(argv = process.argv.slice(2)) {
   const ralphexVersionText = run(ralphexCommand, ["--version"], project, "Ralphex version check");
   const ralphexVersion = parseVersion(ralphexVersionText, "Ralphex");
   if (!atLeast(ralphexVersion, [1, 6, 0])) fail("Ralphex 1.6.0 or newer is required");
+
+  ensureLocalGitExcludes(project);
 
   const home = resolve(project, ".codexlooper");
   const binDir = resolve(home, "bin");
