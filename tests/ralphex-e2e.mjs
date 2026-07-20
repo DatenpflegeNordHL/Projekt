@@ -50,7 +50,7 @@ try {
   const fakeCodexSource = join(tools, "fake-codex.mjs");
   writeFileSync(
     fakeCodexSource,
-    `import { appendFileSync, readFileSync } from "node:fs";
+    `import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 if (process.argv[2] === "--version") { console.log("codex-cli 0.130.0"); process.exit(0); }
@@ -61,33 +61,19 @@ const prompt = readFileSync(0, "utf8");
 const modelArg = args.find((value) => value.startsWith('model="')) || "model=unknown";
 const sandboxIndex = args.indexOf("--sandbox");
 const sandbox = sandboxIndex >= 0 ? args[sandboxIndex + 1] : "missing";
-appendFileSync(join(process.cwd(), ".codexlooper", "model-runs.jsonl"), JSON.stringify({ modelArg, sandbox, json: args.includes("--json"), outputSchema: args.includes("--output-schema") }) + "\\n");
-
 if (!args.includes("--json")) process.exit(34);
 let text;
 if (modelArg.includes("gpt-5.6-sol")) {
+  if (sandbox !== "read-only") process.exit(35);
   text = "NO ISSUES FOUND";
 } else if (prompt.includes("Read the plan file at")) {
-  const patch = [
-    "diff --git a/docs/plans/fixture.md b/docs/plans/fixture.md",
-    "--- a/docs/plans/fixture.md",
-    "+++ b/docs/plans/fixture.md",
-    "@@ -8,4 +8,4 @@",
-    " - " + String.fromCharCode(96) + "test -f result.txt" + String.fromCharCode(96),
-    " ",
-    " ### Task 1: Produce result",
-    "-- [ ] Create result.txt containing fixture-pass",
-    "+- [x] Create result.txt containing fixture-pass",
-    "diff --git a/result.txt b/result.txt",
-    "new file mode 100644",
-    "--- /dev/null",
-    "+++ b/result.txt",
-    "@@ -0,0 +1 @@",
-    "+fixture-pass",
-    "",
-  ].join("\\n");
-  text = JSON.stringify({ patch, signal: "<<<RALPHEX:ALL_TASKS_DONE>>>", overview: "Completed fixture through a host-applied patch." });
+  if (sandbox !== "workspace-write" || args.includes("--output-schema")) process.exit(36);
+  const planPath = join(process.cwd(), "docs", "plans", "fixture.md");
+  writeFileSync(join(process.cwd(), "result.txt"), "fixture-pass\\n");
+  writeFileSync(planPath, readFileSync(planPath, "utf8").replace("- [ ] Create", "- [x] Create"));
+  text = JSON.stringify({ patch: "", signal: "<<<RALPHEX:ALL_TASKS_DONE>>>", overview: "Completed fixture inside the isolated snapshot." });
 } else {
+  if (sandbox !== "workspace-write") process.exit(37);
   text = JSON.stringify({ patch: "", signal: "<<<RALPHEX:REVIEW_DONE>>>", overview: "No review findings." });
 }
 console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } }));
@@ -135,21 +121,6 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeCodexSource)} "$@"
   assert.equal(readFileSync(join(project, "result.txt"), "utf8"), "fixture-pass\n");
   assert.ok(existsSync(join(project, "docs", "plans", "completed", "fixture.md")));
 
-  const runs = readFileSync(join(project, ".codexlooper", "model-runs.jsonl"), "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
-  assert.ok(
-    runs.some(
-      (entry) =>
-        entry.modelArg.includes("gpt-5.6-terra") &&
-        entry.sandbox === "read-only" &&
-        entry.outputSchema === false,
-    ),
-  );
-  assert.ok(runs.some((entry) => entry.modelArg.includes("gpt-5.6-sol") && entry.sandbox === "read-only"));
-  assert.ok(runs.every((entry) => entry.json === true));
-
   const runEntries = readdirSync(join(project, ".codexlooper", "runs"), { withFileTypes: true }).filter(
     (entry) => entry.isDirectory(),
   );
@@ -163,6 +134,8 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeCodexSource)} "$@"
   assert.ok(receipt.usage.totals.estimated_cost_usd > 0);
   const hostEvents = readFileSync(join(runDirectory, "host-commits.jsonl"), "utf8");
   assert.match(hostEvents, /"transport":"structured_patch"/);
+  assert.equal(existsSync(join(runDirectory, "snapshots")), true);
+  assert.deepEqual(readdirSync(join(runDirectory, "snapshots")), []);
   assert.doesNotMatch(JSON.stringify(receipt), /closerouter_fixture_secret|GITHUB_TOKEN/);
 
   process.stdout.write("CODEXLOOPER_RALPHEX_E2E=PASS\n");
