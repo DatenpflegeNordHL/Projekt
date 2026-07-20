@@ -29,8 +29,16 @@ After reviewing and committing the generated scaffold, add a bounded plan under 
 
 ## Current status
 
+The **core local CLI roadmap is complete**.
+
 - WP0: CloseRouter, Codex, MEX and Ralphex integration verified.
 - WP1: real one-command Terra implementation and Sol review loop verified.
-- WP2: reproducible non-destructive target-project bootstrap in progress.
+- WP2: reproducible non-destructive target-project bootstrap verified.
+- WP3: review and repair loop completed inside WP1.
+- WP4: token and cost controls completed inside WP1.
+- WP5: real Terra/Sol and bootstrap pilots completed.
+- WP6: dashboard intentionally deferred as an optional product layer.
 
-Version 1 is a local CLI. It does not push, merge, deploy, publish, purchase, or perform other external actions without explicit authorization.
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for evidence and supported versions.
+
+CodexLooper does not automatically push, merge, deploy, publish, purchase, contact third parties, or perform other external actions. Those require separate authorization.
