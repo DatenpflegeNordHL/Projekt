@@ -1,0 +1,113 @@
+name: Live CloseRouter Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_cli_smoke:
+        description: Also verify both models through the Codex CLI Responses transport
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codexlooper-live-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CLOSEROUTER_API_KEY: ${{ secrets.CLOSEROUTER_API_KEY }}
+      CODEXLOOPER_LIVE_MAX_OUTPUT_TOKENS: "64"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+
+      - name: Require CloseRouter credential
+        shell: bash
+        run: |
+          if [ -z "${CLOSEROUTER_API_KEY:-}" ]; then
+            echo "::error::Repository secret CLOSEROUTER_API_KEY is missing"
+            exit 1
+          fi
+
+      - name: Install verified toolchain
+        shell: bash
+        run: |
+          npm install --global @openai/codex@latest mex-agent@0.6.3
+          go install github.com/umputun/ralphex/cmd/ralphex@v1.6.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Verify tool versions
+        shell: bash
+        run: |
+          codex --version
+          mex --version || mex commands >/dev/null
+          ralphex --version
+
+      - name: Configure local Git identity
+        shell: bash
+        run: |
+          git config user.name "CodexLooper Smoke"
+          git config user.email "codexlooper-smoke@users.noreply.github.com"
+
+      - name: Run deterministic checks
+        run: npm run check
+
+      - name: Install CodexLooper integration
+        shell: bash
+        run: |
+          node scripts/install.mjs \
+            --project "$GITHUB_WORKSPACE" \
+            --real-codex "$(command -v codex)" \
+            --mex-command "$(command -v mex)" \
+            --ralphex-command "$(command -v ralphex)"
+
+      - name: Export controlled profile paths
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE' >> "$GITHUB_ENV"
+          import { readFileSync } from "node:fs";
+          const state = JSON.parse(readFileSync(".codexlooper/install-state.json", "utf8"));
+          console.log(`CODEXLOOPER_REAL_CODEX=${state.real_codex}`);
+          console.log(`CODEX_HOME=${state.codex_home}`);
+          console.log(`CODEXLOOPER_BUILDER_MODEL=${state.builder.model}`);
+          console.log(`CODEXLOOPER_BUILDER_REASONING=${state.builder.reasoning}`);
+          console.log(`CODEXLOOPER_REVIEW_MODEL=${state.reviewer.model}`);
+          console.log(`CODEXLOOPER_REVIEW_REASONING=${state.reviewer.reasoning}`);
+          console.log(`CODEXLOOPER_ALLOWED_MODELS=${state.builder.model},${state.reviewer.model}`);
+          NODE
+          if [ "${{ inputs.run_cli_smoke }}" = "false" ]; then
+            echo "CODEXLOOPER_RUN_CLI_SMOKE=0" >> "$GITHUB_ENV"
+          else
+            echo "CODEXLOOPER_RUN_CLI_SMOKE=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run real Terra and Sol smoke
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run live-smoke 2>&1 | tee live-smoke.log
+
+      - name: Upload redacted receipt and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codexlooper-live-smoke
+          path: |
+            .codexlooper/live-smoke-receipt.json
+            live-smoke.log
+          if-no-files-found: warn
+          retention-days: 7
