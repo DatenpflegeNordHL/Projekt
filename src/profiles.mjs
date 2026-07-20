@@ -30,6 +30,7 @@ export function prepareProfileLaunch(
   profile,
   {
     json = false,
+    multiAgent = false,
     sandbox = profile === "reviewer" ? "read-only" : "workspace-write",
     sourceEnv = process.env,
     projectRoot = process.cwd(),
@@ -55,10 +56,11 @@ export function prepareProfileLaunch(
 
   const args = ["exec"];
   if (json) args.push("--json");
+  args.push("--ephemeral", "--sandbox", sandbox);
+  if (multiAgent) {
+    args.push("-c", "features.multi_agent=true");
+  }
   args.push(
-    "--ephemeral",
-    "--sandbox",
-    sandbox,
     "-c",
     `model=${JSON.stringify(values.model)}`,
     "-c",
@@ -77,6 +79,7 @@ export function prepareProfileLaunch(
       reasoning: values.reasoning,
       sandbox,
       json,
+      multi_agent: multiAgent,
     },
   };
 }
