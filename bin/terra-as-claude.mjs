@@ -3,6 +3,7 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { recordCodexDiagnosticLine } from "../src/codex-diagnostics.mjs";
 import { superviseBuilderChanges } from "../src/git-supervisor.mjs";
 import { prepareProfileLaunch } from "../src/profiles.mjs";
 import { translateCodexEvent } from "../src/claude-stream.mjs";
@@ -117,6 +118,11 @@ try {
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   const linesClosed = new Promise((resolveClose) => lines.once("close", resolveClose));
   lines.on("line", (line) => {
+    try {
+      recordCodexDiagnosticLine(line);
+    } catch {
+      // Diagnostics are optional and may never alter the execution result.
+    }
     try {
       recordCodexUsageLine(line, launch.metadata);
     } catch (error) {
