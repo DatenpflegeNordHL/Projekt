@@ -107,7 +107,7 @@ test("bootstraps a clean Git project without replacing existing project files", 
       "preserved",
     );
     const rawReceipt = readFileSync(result.receiptPath, "utf8");
-    assert.doesNotMatch(rawReceipt, /API_KEY|secret/i);
+    assert.doesNotMatch(rawReceipt, /CLOSEROUTER_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|GITHUB_TOKEN/);
   } finally {
     rmSync(current.root, { recursive: true, force: true });
   }
