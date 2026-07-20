@@ -2,6 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import {
   recordCodexDiagnosticLine,
@@ -96,6 +97,47 @@ function parseLegacySignal(text, phase) {
   };
 }
 
+function parseEnvelopeMessages(messages, phase, snapshotPatch) {
+  let lastError;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    try {
+      return parseBuilderEnvelope(messages[index], phase);
+    } catch (error) {
+      lastError = error;
+      const legacy = parseLegacySignal(messages[index], phase);
+      if (legacy) return legacy;
+    }
+  }
+  if (snapshotPatch.trim()) {
+    return { version: 1, patch: "", signal: "", summary: "", snapshot_fallback: true };
+  }
+  throw lastError || new Error("Codex builder returned no usable agent result");
+}
+
+function planCompleted(projectRoot = process.cwd(), sourceEnv = process.env) {
+  const policyPath = sourceEnv.CODEXLOOPER_RUN_POLICY;
+  if (typeof policyPath !== "string" || !policyPath) fail("Run policy is unavailable for completion check");
+  let policy;
+  try {
+    policy = JSON.parse(readFileSync(policyPath, "utf8"));
+  } catch {
+    fail("Run policy is invalid during completion check");
+  }
+  if (policy?.schema !== "codexlooper.run-policy.v1" || typeof policy.plan !== "string") {
+    fail("Run policy schema is invalid during completion check");
+  }
+  const plan = readFileSync(resolve(projectRoot, policy.plan), "utf8");
+  return !plan.includes("- [ ]");
+}
+
+function hostSignal({ phase, requestedSignal, committed, effectivePatch }) {
+  if (requestedSignal === "<<<RALPHEX:TASK_FAILED>>>") return requestedSignal;
+  if (phase === "task") {
+    return planCompleted() ? "<<<RALPHEX:ALL_TASKS_DONE>>>" : "";
+  }
+  return committed || effectivePatch.trim() ? "" : "<<<RALPHEX:REVIEW_DONE>>>";
+}
+
 function structuredPatchGuidance(phase) {
   const phaseSignal =
     phase === "review"
@@ -105,12 +147,12 @@ function structuredPatchGuidance(phase) {
 - You are running inside a disposable clone of the repository. The real project is not writable from this session.
 - Use shell, file-inspection, tests, git status, git diff, and git log normally inside this snapshot.
 - You may edit files in the disposable snapshot when useful, but do not commit, branch, merge, reset, push, or alter Git metadata.
-- Your final response must be one plain JSON object, not markdown. Required fields are patch and signal. Optional fields are version, summary, and overview. No other fields are allowed.
+- Your final response should be one plain JSON object, not markdown. Required fields are patch and signal. Optional fields are version, summary, and overview. No other fields are allowed.
 - patch must be an empty string or a standard textual git unified diff beginning with diff --git lines. If you edited the snapshot, return the resulting git diff.
 - signal must be one of: empty string, <<<RALPHEX:ALL_TASKS_DONE>>>, <<<RALPHEX:REVIEW_DONE>>>, or <<<RALPHEX:TASK_FAILED>>> as allowed for the current phase.
 - Use only same-path file additions, deletions, and modifications. Do not emit renames, copies, binary patches, symlinks, submodules, quoted paths, or paths containing whitespace.
 - Every changed path must be permitted by the active plan. For task work, include the plan checkbox update in the patch.
-- The trusted host independently captures snapshot changes, validates allowed paths, runs git apply --check against the real project, repeats validation commands, and creates the local commit.
+- The trusted host independently captures snapshot changes, validates allowed paths, runs git apply --check against the real project, repeats validation commands, creates the local commit, and determines completion from the actual plan state.
 - ${phaseSignal}
 - Use TASK_FAILED only when the task cannot be completed safely; TASK_FAILED requires an empty patch.
 - Current phase: ${phase}.`;
@@ -223,32 +265,33 @@ try {
     const events = toolDiagnostics.length > 0 ? `; events=${boundedToolDiagnostics(toolDiagnostics)}` : "";
     fail(`Codex builder exited with status ${exitCode}${detail ? `: ${detail}` : ""}${events}`);
   }
-  if (agentMessages.length === 0) fail("Codex builder returned no structured agent message");
+  if (agentMessages.length === 0) fail("Codex builder returned no agent message");
 
   const snapshotPatch = captureBuilderSnapshotPatch({ snapshot });
-  let envelope;
-  try {
-    envelope = parseBuilderEnvelope(agentMessages.at(-1), phase);
-  } catch (error) {
-    envelope = parseLegacySignal(agentMessages.at(-1), phase);
-    if (!envelope) throw error;
-  }
+  const envelope = parseEnvelopeMessages(agentMessages, phase, snapshotPatch);
   let supervised = { committed: false };
+  let effectivePatch = "";
   if (envelope.signal !== "<<<RALPHEX:TASK_FAILED>>>") {
-    const effectivePatch = envelope.patch.trim() ? envelope.patch : snapshotPatch;
+    effectivePatch = envelope.patch.trim() ? envelope.patch : snapshotPatch;
     supervised = effectivePatch.trim()
       ? applyBuilderPatch({ patch: effectivePatch, phase })
       : envelope.legacy_worktree
         ? superviseBuilderChanges({ phase })
         : { committed: false };
   }
+  const signal = hostSignal({
+    phase,
+    requestedSignal: envelope.signal,
+    committed: Boolean(supervised.committed),
+    effectivePatch,
+  });
   if (envelope.summary) emitText(`${envelope.summary}\n`);
   if (supervised.committed) {
     emitText(
       `CodexLooper host commit ${supervised.commit.slice(0, 12)} created after isolated patch, policy, and validation checks.\n`,
     );
   }
-  if (envelope.signal) emitText(`${envelope.signal}\n`);
+  if (signal) emitText(`${signal}\n`);
   emit({ type: "result", result: "" });
 } catch (error) {
   const diagnostic = `CODEXLOOPER_TERRA_BLOCK: ${redactDiagnostic(error.message)}`;
