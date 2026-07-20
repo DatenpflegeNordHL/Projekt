@@ -30,6 +30,21 @@ const SAFE_ENV_KEYS = [
 ];
 const MAX_VALIDATION_OUTPUT = 12_000;
 const VALIDATION_TIMEOUT_MS = 180_000;
+const MAX_PATCH_BYTES = 2_000_000;
+const PATCH_PATH = /^[A-Za-z0-9._@+\/-]+$/;
+const FORBIDDEN_PATCH_MARKERS = [
+  "GIT binary patch",
+  "Binary files ",
+  "rename from ",
+  "rename to ",
+  "copy from ",
+  "copy to ",
+  "Subproject commit ",
+  "new file mode 120000",
+  "deleted file mode 120000",
+  "new file mode 160000",
+  "deleted file mode 160000",
+];
 
 function fail(code, message) {
   const error = new Error(message);
@@ -46,13 +61,14 @@ function safeEnvironment(sourceEnv = process.env) {
   return env;
 }
 
-function run(command, args, { cwd, env, label, timeout } = {}) {
+function run(command, args, { cwd, env, label, timeout, input } = {}) {
   const result = spawnSync(command, args, {
     cwd,
     env: env || safeEnvironment(),
     encoding: "utf8",
     maxBuffer: 20 * 1024 * 1024,
     timeout,
+    input,
   });
   if (result.error || result.status !== 0) {
     const detail = String(result.stderr || result.stdout || result.error?.message || "unknown error")
@@ -159,25 +175,8 @@ function recordEvent(policyPath, event) {
   chmodSync(eventPath, 0o600);
 }
 
-export function superviseBuilderChanges({
-  phase,
-  sourceEnv = process.env,
-  projectRoot = process.cwd(),
-  now = () => new Date(),
-} = {}) {
-  if (phase !== "task" && phase !== "review") {
-    fail("CODEXLOOPER_SUPERVISOR_PHASE_INVALID", "Supervisor phase must be task or review");
-  }
-  const root = realpathSync(projectRoot);
-  const paths = changedPaths(root);
-  if (paths.length === 0) {
-    return { committed: false, changed_paths: [], validation: [] };
-  }
-
-  const { policy, policyPath } = loadPolicy(sourceEnv, root);
-  validatePaths(paths, policy.allowed_paths);
+function commitPaths({ root, paths, policy, policyPath, phase, sourceEnv, now, transport }) {
   const validation = runValidationCommands(root, policy.validation_commands, sourceEnv);
-
   run("/usr/bin/git", ["add", "--all", "--", ...paths], {
     cwd: root,
     env: safeEnvironment(sourceEnv),
@@ -188,7 +187,6 @@ export function superviseBuilderChanges({
     fail("CODEXLOOPER_HOST_COMMIT_EMPTY", "Builder changes produced no staged files");
   }
   validatePaths(staged, policy.allowed_paths);
-
   const message =
     phase === "task"
       ? "feat: complete CodexLooper task iteration"
@@ -204,13 +202,166 @@ export function superviseBuilderChanges({
     label: "Host commit lookup",
   });
   recordEvent(policyPath, {
-    schema: "codexlooper.host-commit.v1",
+    schema: "codexlooper.host-commit.v2",
     created_at: now().toISOString(),
     run_id: sourceEnv.CODEXLOOPER_RUN_ID || null,
     phase,
+    transport,
     commit,
     changed_paths: staged,
     validation,
   });
   return { committed: true, commit, changed_paths: staged, validation };
+}
+
+function normalizePatch(patch) {
+  if (typeof patch !== "string") {
+    fail("CODEXLOOPER_PATCH_INVALID", "Builder patch must be a string");
+  }
+  if (Buffer.byteLength(patch, "utf8") > MAX_PATCH_BYTES || patch.includes("\0")) {
+    fail("CODEXLOOPER_PATCH_INVALID", "Builder patch is invalid or too large");
+  }
+  const normalized = patch.replaceAll("\r\n", "\n");
+  if (!normalized.trim()) return "";
+  if (!normalized.startsWith("diff --git ")) {
+    fail("CODEXLOOPER_PATCH_INVALID", "Builder patch must begin with a git diff header");
+  }
+  return normalized.endsWith("\n") ? normalized : `${normalized}\n`;
+}
+
+function declaredPatchPaths(patch) {
+  if (!patch) return [];
+  const lines = patch.split("\n");
+  for (const marker of FORBIDDEN_PATCH_MARKERS) {
+    if (lines.some((line) => line.startsWith(marker))) {
+      fail("CODEXLOOPER_PATCH_UNSUPPORTED", `Builder patch uses unsupported content: ${marker.trim()}`);
+    }
+  }
+  const paths = [];
+  for (const line of lines) {
+    if (!line.startsWith("diff --git ")) continue;
+    const match = line.match(/^diff --git a\/([^\s]+) b\/([^\s]+)$/);
+    if (!match || match[1] !== match[2]) {
+      fail("CODEXLOOPER_PATCH_UNSUPPORTED", "Builder patch must use same-path non-renaming git diffs");
+    }
+    const path = match[1];
+    if (!PATCH_PATH.test(path) || path.startsWith("/") || path.split("/").includes("..")) {
+      fail("CODEXLOOPER_PATCH_PATH_INVALID", `Builder patch contains an unsafe path: ${path}`);
+    }
+    paths.push(path);
+  }
+  if (paths.length === 0) {
+    fail("CODEXLOOPER_PATCH_INVALID", "Non-empty builder patch contains no git diff headers");
+  }
+  if (new Set(paths).size !== paths.length) {
+    fail("CODEXLOOPER_PATCH_INVALID", "Builder patch repeats a file diff");
+  }
+  return paths.sort();
+}
+
+function samePaths(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function cleanupAppliedPatch(root, paths, sourceEnv) {
+  run("/usr/bin/git", ["reset", "--hard", "HEAD"], {
+    cwd: root,
+    env: safeEnvironment(sourceEnv),
+    label: "Host patch rollback",
+  });
+  if (paths.length > 0) {
+    run("/usr/bin/git", ["clean", "-fd", "--", ...paths], {
+      cwd: root,
+      env: safeEnvironment(sourceEnv),
+      label: "Host untracked patch rollback",
+    });
+  }
+}
+
+export function applyBuilderPatch({
+  patch,
+  phase,
+  sourceEnv = process.env,
+  projectRoot = process.cwd(),
+  now = () => new Date(),
+} = {}) {
+  if (phase !== "task" && phase !== "review") {
+    fail("CODEXLOOPER_SUPERVISOR_PHASE_INVALID", "Supervisor phase must be task or review");
+  }
+  const root = realpathSync(projectRoot);
+  if (changedPaths(root).length > 0) {
+    fail("CODEXLOOPER_PATCH_DIRTY", "Host patch application requires a clean worktree");
+  }
+  const normalizedPatch = normalizePatch(patch);
+  if (!normalizedPatch) {
+    return { committed: false, changed_paths: [], validation: [] };
+  }
+  const { policy, policyPath } = loadPolicy(sourceEnv, root);
+  const declared = declaredPatchPaths(normalizedPatch);
+  validatePaths(declared, policy.allowed_paths);
+  run("/usr/bin/git", ["apply", "--check", "--recount", "--whitespace=error-all", "-"], {
+    cwd: root,
+    env: safeEnvironment(sourceEnv),
+    label: "Host patch check",
+    input: normalizedPatch,
+  });
+  let applied = false;
+  try {
+    run("/usr/bin/git", ["apply", "--recount", "--whitespace=error-all", "-"], {
+      cwd: root,
+      env: safeEnvironment(sourceEnv),
+      label: "Host patch apply",
+      input: normalizedPatch,
+    });
+    applied = true;
+    const actual = changedPaths(root);
+    if (!samePaths(actual, declared)) {
+      fail(
+        "CODEXLOOPER_PATCH_PATH_MISMATCH",
+        `Applied patch paths do not match declared diff paths: ${actual.join(", ")}`,
+      );
+    }
+    validatePaths(actual, policy.allowed_paths);
+    return commitPaths({
+      root,
+      paths: actual,
+      policy,
+      policyPath,
+      phase,
+      sourceEnv,
+      now,
+      transport: "structured_patch",
+    });
+  } catch (error) {
+    if (applied && changedPaths(root).length > 0) cleanupAppliedPatch(root, declared, sourceEnv);
+    throw error;
+  }
+}
+
+export function superviseBuilderChanges({
+  phase,
+  sourceEnv = process.env,
+  projectRoot = process.cwd(),
+  now = () => new Date(),
+} = {}) {
+  if (phase !== "task" && phase !== "review") {
+    fail("CODEXLOOPER_SUPERVISOR_PHASE_INVALID", "Supervisor phase must be task or review");
+  }
+  const root = realpathSync(projectRoot);
+  const paths = changedPaths(root);
+  if (paths.length === 0) {
+    return { committed: false, changed_paths: [], validation: [] };
+  }
+  const { policy, policyPath } = loadPolicy(sourceEnv, root);
+  validatePaths(paths, policy.allowed_paths);
+  return commitPaths({
+    root,
+    paths,
+    policy,
+    policyPath,
+    phase,
+    sourceEnv,
+    now,
+    transport: "worktree",
+  });
 }
