@@ -14,6 +14,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { runPreflight } from "../scripts/preflight.mjs";
 import { ensurePrivateDirectoryChain } from "./runtime-paths.mjs";
+import { parseRunPolicy } from "./run-policy.mjs";
 import { aggregateUsage, readUsageEvents } from "./telemetry.mjs";
 
 const MAX_PLAN_BYTES = 2_000_000;
@@ -139,6 +140,7 @@ function validatePlan(projectRoot, supplied) {
     absolute: planPath,
     relative: relative(root, planPath).split(sep).join("/"),
     completedRelative: `docs/plans/completed/${basename(planPath)}`,
+    content,
   };
 }
 
@@ -221,11 +223,14 @@ export async function runProject({
     fail("CODEXLOOPER_CREDENTIAL_MISSING", "CLOSEROUTER_API_KEY is required");
   }
   const plan = validatePlan(projectRoot, argv[0]);
+  const policy = parseRunPolicy(plan.relative, plan.content);
   ensureCleanTrackedPlan(projectRoot, plan.relative);
 
   const id = runId(now, randomBytesImpl);
   const runDirectory = privateRunDirectory(projectRoot, id);
+  const policyPath = resolve(runDirectory, "policy.json");
   const receiptPath = resolve(runDirectory, "receipt.json");
+  writeAtomic(policyPath, `${JSON.stringify(policy, null, 2)}\n`, 0o600);
   const started = now();
   const headBefore = git(projectRoot, ["rev-parse", "HEAD"], "Head check");
   const branch = git(projectRoot, ["branch", "--show-current"], "Branch check");
@@ -243,6 +248,10 @@ export async function runProject({
     head_after: null,
     commits_created: 0,
     ralphex_exit_code: null,
+    policy: {
+      allowed_paths: policy.allowed_paths,
+      validation_commands: policy.validation_commands,
+    },
     models: {
       builder: {
         id: env.CODEXLOOPER_BUILDER_MODEL || "openai/gpt-5.6-terra",
@@ -291,6 +300,7 @@ export async function runProject({
       CLOSEROUTER_API_KEY: secret,
       CODEXLOOPER_RUN_ID: id,
       CODEXLOOPER_RUN_DIR: runDirectory,
+      CODEXLOOPER_RUN_POLICY: policyPath,
       CODEXLOOPER_PROJECT: projectRoot,
     });
     const exitCode = await spawnRalphex(ralphexCommand, plan.relative, {
