@@ -129,9 +129,11 @@ jobs:
             --mex-command "$(command -v mex)" \
             --ralphex-command "$(command -v ralphex)"
           sed -i 's/max_iterations = 50/max_iterations = 10/' "$PILOT/.ralphex/config"
-          codex --version > "$PILOT/tool-versions.txt"
-          mex --version >> "$PILOT/tool-versions.txt" 2>/dev/null || mex commands >> "$PILOT/tool-versions.txt"
-          ralphex --version >> "$PILOT/tool-versions.txt"
+          PILOT_TOOL_VERSIONS="$RUNNER_TEMP/codexlooper-wp1-tool-versions.txt"
+          echo "PILOT_TOOL_VERSIONS=$PILOT_TOOL_VERSIONS" >> "$GITHUB_ENV"
+          codex --version > "$PILOT_TOOL_VERSIONS"
+          mex --version >> "$PILOT_TOOL_VERSIONS" 2>/dev/null || mex commands >> "$PILOT_TOOL_VERSIONS"
+          ralphex --version >> "$PILOT_TOOL_VERSIONS"
 
       - name: Run real one-command autonomous pilot
         if: steps.trigger.outputs.run == 'true'
@@ -197,6 +199,6 @@ jobs:
           path: |
             ${{ env.PILOT }}/.codexlooper/runs/*/receipt.json
             ${{ env.PILOT }}/pilot-summary.json
-            ${{ env.PILOT }}/tool-versions.txt
+            ${{ env.PILOT_TOOL_VERSIONS }}
           if-no-files-found: warn
           retention-days: 7
