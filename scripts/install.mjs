@@ -206,7 +206,7 @@ export function install(argv = process.argv.slice(2)) {
   writeAtomic(terraExecutor, wrapperScript({ ...wrapperOptions, entrypoint: TERRA_ADAPTER }), 0o700);
   writeAtomic(solReviewer, wrapperScript({ ...wrapperOptions, entrypoint: SOL_REVIEW }), 0o700);
 
-  const config = `claude_command = ${iniValue(terraExecutor)}\nclaude_args =\ntask_model =\nreview_model =\npreserve_anthropic_api_key = false\ncodex_enabled = false\nexternal_review_tool = custom\ncustom_review_script = ${iniValue(solReviewer)}\nfinalize_enabled = false\nmove_plan_on_completion = true\ntask_retry_count = 1\nmax_iterations = 50\nmax_external_iterations = 2\nreview_patience = 2\nsession_timeout = 1h\nidle_timeout = 10m\nplans_dir = docs/plans\n`;
+  const config = `claude_command = ${iniValue(terraExecutor)}\nclaude_args =\ntask_model =\nreview_model =\npreserve_anthropic_api_key = false\nexternal_review_tool = custom\ncustom_review_script = ${iniValue(solReviewer)}\nfinalize_enabled = false\nmove_plan_on_completion = true\ntask_retry_count = 1\nmax_iterations = 50\nmax_external_iterations = 2\nreview_patience = 2\nsession_timeout = 1h\nidle_timeout = 10m\nplans_dir = docs/plans\n`;
   writeAtomic(ralphexConfig, config, 0o600);
 
   const preflightArgs = [
