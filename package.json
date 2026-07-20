@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "check": "node --check src/launcher.mjs && node --check src/profiles.mjs && node --check src/claude-stream.mjs && node --check src/telemetry.mjs && node --check src/run.mjs && node --check src/live-smoke.mjs && node --check bin/codex-closerouter.mjs && node --check bin/terra-as-claude.mjs && node --check bin/sol-review.mjs && node --check scripts/install.mjs && node --check scripts/preflight.mjs && node --check scripts/run.mjs && node --check scripts/live-smoke.mjs && node --test",
+    "check": "node --check src/launcher.mjs && node --check src/profiles.mjs && node --check src/claude-stream.mjs && node --check src/runtime-paths.mjs && node --check src/telemetry.mjs && node --check src/run.mjs && node --check src/live-smoke.mjs && node --check bin/codex-closerouter.mjs && node --check bin/terra-as-claude.mjs && node --check bin/sol-review.mjs && node --check scripts/install.mjs && node --check scripts/preflight.mjs && node --check scripts/run.mjs && node --check scripts/live-smoke.mjs && node --test",
     "test": "node --test",
     "live-smoke": "node scripts/live-smoke.mjs"
   }
