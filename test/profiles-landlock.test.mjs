@@ -30,48 +30,45 @@ function fixture() {
   };
 }
 
-test("Linux workspace-write snapshots force the documented Landlock fallback", () => {
+function hasLandlockOverride(launch) {
+  return launch.args.some(
+    (value, index) => value === "-c" && launch.args[index + 1] === "use_legacy_landlock=true",
+  );
+}
+
+test("Linux read-only and workspace-write launches force the Landlock fallback", () => {
   const current = fixture();
   try {
-    const launch = prepareProfileLaunch("builder", {
-      json: true,
-      sandbox: "workspace-write",
-      sourceEnv: current.sourceEnv,
-      projectRoot: current.snapshot,
-      platform: "linux",
-    });
-    assert.ok(
-      launch.args.some(
-        (value, index) => value === "-c" && launch.args[index + 1] === "use_legacy_landlock=true",
-      ),
-    );
-    assert.equal(launch.metadata.sandbox_backend, "legacy_landlock");
+    for (const sandbox of ["read-only", "workspace-write"]) {
+      const launch = prepareProfileLaunch(sandbox === "read-only" ? "reviewer" : "builder", {
+        json: true,
+        sandbox,
+        sourceEnv: current.sourceEnv,
+        projectRoot: current.snapshot,
+        platform: "linux",
+      });
+      assert.equal(hasLandlockOverride(launch), true);
+      assert.equal(launch.metadata.sandbox_backend, "legacy_landlock");
+    }
   } finally {
     rmSync(current.project, { recursive: true, force: true });
   }
 });
 
-test("Landlock override is absent for read-only and non-Linux launches", () => {
+test("Landlock override is absent on non-Linux launches", () => {
   const current = fixture();
   try {
-    const readOnly = prepareProfileLaunch("reviewer", {
-      json: true,
-      sandbox: "read-only",
-      sourceEnv: current.sourceEnv,
-      projectRoot: current.snapshot,
-      platform: "linux",
-    });
-    assert.equal(readOnly.args.includes("use_legacy_landlock=true"), false);
-
-    const darwin = prepareProfileLaunch("builder", {
-      json: true,
-      sandbox: "workspace-write",
-      sourceEnv: current.sourceEnv,
-      projectRoot: current.snapshot,
-      platform: "darwin",
-    });
-    assert.equal(darwin.args.includes("use_legacy_landlock=true"), false);
-    assert.equal(darwin.metadata.sandbox_backend, "platform_default");
+    for (const sandbox of ["read-only", "workspace-write"]) {
+      const launch = prepareProfileLaunch(sandbox === "read-only" ? "reviewer" : "builder", {
+        json: true,
+        sandbox,
+        sourceEnv: current.sourceEnv,
+        projectRoot: current.snapshot,
+        platform: "darwin",
+      });
+      assert.equal(hasLandlockOverride(launch), false);
+      assert.equal(launch.metadata.sandbox_backend, "platform_default");
+    }
   } finally {
     rmSync(current.project, { recursive: true, force: true });
   }
