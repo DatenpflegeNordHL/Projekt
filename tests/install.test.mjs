@@ -21,7 +21,7 @@ function executable(path, content) {
   return path;
 }
 
-function createFixture(codexVersion = "0.130.0") {
+function createFixture(codexVersion = "0.130.0", ralphexVersion = "1.6.0") {
   const root = mkdtempSync(join(tmpdir(), "codexlooper fixture "));
   const project = join(root, "project with spaces");
   const tools = join(root, "tools");
@@ -43,7 +43,7 @@ function createFixture(codexVersion = "0.130.0") {
   );
   const ralphex = executable(
     join(tools, "ralphex"),
-    "#!/bin/sh\nset -eu\nif [ \"${1:-}\" = \"--version\" ]; then echo 'ralphex 1.6.0'; exit 0; fi\nprintf '%s\\n' \"$@\" > \"$(pwd)/ralphex-args.txt\"\n",
+    `#!/bin/sh\nset -eu\nif [ "\${1:-}" = "--version" ]; then echo 'ralphex ${ralphexVersion}'; exit 0; fi\nprintf '%s\\n' "$@" > "$(pwd)/ralphex-args.txt"\n`,
   );
 
   return { root, project, codex, mex, ralphex };
@@ -210,4 +210,18 @@ test("installer rejects an obsolete Codex CLI", () => {
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
+});
+
+test("installer rejects an obsolete Ralphex", () => {
+  const fixture = createFixture("0.130.0", "1.5.1");
+  try {
+    assert.throws(() => installFixture(fixture), /Ralphex 1\.6\.0 or newer/);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("installer and preflight reject unknown arguments", () => {
+  assert.throws(() => install(["--surprise", "value"]), /Unknown argument/);
+  assert.throws(() => runPreflight(["--surprise", "value"]), /Unknown argument/);
 });
