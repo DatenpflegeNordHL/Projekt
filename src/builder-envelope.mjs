@@ -33,6 +33,16 @@ function assertPhase(phase) {
   }
 }
 
+function jsonCandidate(text) {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/iu);
+  if (fenced) return fenced[1].trim();
+  const first = trimmed.indexOf("{");
+  const last = trimmed.lastIndexOf("}");
+  if (first >= 0 && last > first) return trimmed.slice(first, last + 1);
+  return trimmed;
+}
+
 export function builderOutputSchema() {
   return {
     $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -64,7 +74,7 @@ export function parseBuilderEnvelope(text, phase) {
   }
   let value;
   try {
-    value = JSON.parse(text.trim());
+    value = JSON.parse(jsonCandidate(text));
   } catch {
     fail("CODEXLOOPER_ENVELOPE_INVALID", "Builder response was not valid JSON");
   }
