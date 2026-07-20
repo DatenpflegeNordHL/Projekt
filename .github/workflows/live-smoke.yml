@@ -8,6 +8,11 @@ on:
         required: true
         type: boolean
         default: true
+  push:
+    branches:
+      - feature/wp0-integration
+    paths:
+      - .github/live-smoke-trigger
 
 permissions:
   contents: read
@@ -89,10 +94,10 @@ jobs:
           console.log(`CODEXLOOPER_REVIEW_REASONING=${state.reviewer.reasoning}`);
           console.log(`CODEXLOOPER_ALLOWED_MODELS=${state.builder.model},${state.reviewer.model}`);
           NODE
-          if [ "${{ inputs.run_cli_smoke }}" = "true" ]; then
-            echo "CODEXLOOPER_RUN_CLI_SMOKE=1" >> "$GITHUB_ENV"
-          else
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.run_cli_smoke }}" = "false" ]; then
             echo "CODEXLOOPER_RUN_CLI_SMOKE=0" >> "$GITHUB_ENV"
+          else
+            echo "CODEXLOOPER_RUN_CLI_SMOKE=1" >> "$GITHUB_ENV"
           fi
 
       - name: Run real Terra and Sol smoke
