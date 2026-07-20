@@ -4,6 +4,8 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const THIS_FILE = fileURLToPath(import.meta.url);
+const REQUIRED_ARGUMENTS = ["--project", "--mex-command", "--real-codex", "--ralphex-command"];
+const ALLOWED_ARGUMENTS = new Set(REQUIRED_ARGUMENTS);
 
 function fail(message) {
   throw new Error(message);
@@ -13,8 +15,11 @@ function parseArgs(argv) {
   const values = {};
   for (let index = 0; index < argv.length; index += 1) {
     const key = argv[index];
-    if (!key.startsWith("--") || index + 1 >= argv.length) {
-      fail(`Invalid argument: ${key}`);
+    if (!ALLOWED_ARGUMENTS.has(key)) {
+      fail(`Unknown argument: ${key}`);
+    }
+    if (index + 1 >= argv.length || argv[index + 1].startsWith("--")) {
+      fail(`Missing value for argument: ${key}`);
     }
     if (values[key] !== undefined) {
       fail(`Duplicate argument: ${key}`);
@@ -22,7 +27,7 @@ function parseArgs(argv) {
     values[key] = argv[index + 1];
     index += 1;
   }
-  for (const key of ["--project", "--mex-command", "--real-codex", "--ralphex-command"]) {
+  for (const key of REQUIRED_ARGUMENTS) {
     if (!values[key]) {
       fail(`Missing required argument: ${key}`);
     }
@@ -101,10 +106,14 @@ export function runPreflight(argv = process.argv.slice(2)) {
   }
 
   const mexJson = run(mex, ["check", "--json"], project, "MEX check");
+  let mexReport;
   try {
-    JSON.parse(mexJson);
+    mexReport = JSON.parse(mexJson);
   } catch {
     fail("MEX check did not return valid JSON");
+  }
+  if (!mexReport || typeof mexReport !== "object" || Array.isArray(mexReport)) {
+    fail("MEX check returned an invalid report object");
   }
 
   const codexVersion = parseVersion(run(codex, ["--version"], project, "Codex version check"), "Codex");
@@ -112,7 +121,10 @@ export function runPreflight(argv = process.argv.slice(2)) {
     fail("Codex CLI 0.130.0 or newer is required");
   }
 
-  run(ralphex, ["--version"], project, "Ralphex version check");
+  const ralphexVersion = parseVersion(run(ralphex, ["--version"], project, "Ralphex version check"), "Ralphex");
+  if (!atLeast(ralphexVersion, [1, 6, 0])) {
+    fail("Ralphex 1.6.0 or newer is required");
+  }
   return "CODEXLOOPER_PREFLIGHT=PASS";
 }
 
