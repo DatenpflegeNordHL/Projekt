@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { prepareProfileLaunch } from "./profiles.mjs";
 
 const DEFAULT_BASE_URL = "https://api.closerouter.dev/v1";
@@ -119,7 +119,7 @@ async function responseSmoke({ profile, model, secret, baseUrl, tokens, fetchImp
       signal: controller.signal,
     });
   } catch (error) {
-    fail("CODEXLOOPER_LIVE_REQUEST_FAILED", `${profile} request failed: ${error.message}`);
+    fail("CODEXLOOPER_LIVE_REQUEST_FAILED", `${profile} request failed: ${safeErrorBody(error?.message, secret)}`);
   } finally {
     clearTimeout(timeout);
   }
@@ -187,12 +187,10 @@ function cliSmoke({ profile, nonce, env, projectRoot, spawnImpl }) {
   return {
     profile,
     transport: "codex-cli-responses",
-    requested_model: launch.metadata.model,
-    response_model: launch.metadata.model,
-    response_provider: launch.metadata.model.split("/", 1)[0],
-    request_id: null,
+    configured_model: launch.metadata.model,
+    configured_reasoning: launch.metadata.reasoning,
+    configured_sandbox: launch.metadata.sandbox,
     nonce_verified: true,
-    usage: null,
   };
 }
 
@@ -218,6 +216,7 @@ export async function runLiveSmoke({
 } = {}) {
   if (typeof fetchImpl !== "function") fail("CODEXLOOPER_FETCH_MISSING", "A Fetch implementation is required");
   const secret = requireSecret(env);
+  const root = resolve(projectRoot);
   const baseUrl = (env.CLOSEROUTER_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, "");
   if (baseUrl !== DEFAULT_BASE_URL) fail("CODEXLOOPER_BASE_URL_REJECTED", "Only the official CloseRouter base URL is allowed");
 
@@ -237,7 +236,7 @@ export async function runLiveSmoke({
   if (env.CODEXLOOPER_RUN_CLI_SMOKE === "1") {
     for (const [profile] of profiles) {
       const nonce = `CODEXLOOPER_CLI_${profile.toUpperCase()}_${randomBytesImpl(12).toString("hex")}`;
-      results.push(cliSmoke({ profile, nonce, env, projectRoot, spawnImpl }));
+      results.push(cliSmoke({ profile, nonce, env, projectRoot: root, spawnImpl }));
     }
   }
 
@@ -248,9 +247,10 @@ export async function runLiveSmoke({
     max_output_tokens: tokens,
     results,
   };
-  const receiptPath = resolve(projectRoot, env.CODEXLOOPER_SMOKE_RECEIPT || ".codexlooper/live-smoke-receipt.json");
-  if (receiptPath !== resolve(projectRoot, ".codexlooper/live-smoke-receipt.json") && !receiptPath.startsWith(`${resolve(projectRoot)}/`)) {
-    fail("CODEXLOOPER_RECEIPT_PATH_REJECTED", "Smoke receipt must stay inside the project root");
+  const receiptPath = resolve(root, env.CODEXLOOPER_SMOKE_RECEIPT || ".codexlooper/live-smoke-receipt.json");
+  const receiptRelative = relative(root, receiptPath);
+  if (!receiptRelative || receiptRelative.startsWith("..") || isAbsolute(receiptRelative)) {
+    fail("CODEXLOOPER_RECEIPT_PATH_REJECTED", "Smoke receipt must be a file inside the project root");
   }
   writeAtomic(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
   return { receipt, receiptPath };
