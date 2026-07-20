@@ -52,7 +52,7 @@ try {
   const fakeCodexSource = join(tools, "fake-codex.mjs");
   writeFileSync(
     fakeCodexSource,
-    `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+    `import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 if (process.argv[2] === "--version") { console.log("codex-cli 0.130.0"); process.exit(0); }
@@ -63,23 +63,36 @@ const prompt = readFileSync(0, "utf8");
 const modelArg = args.find((value) => value.startsWith('model="')) || "model=unknown";
 const sandboxIndex = args.indexOf("--sandbox");
 const sandbox = sandboxIndex >= 0 ? args[sandboxIndex + 1] : "missing";
-appendFileSync(join(process.cwd(), ".codexlooper", "model-runs.jsonl"), JSON.stringify({ modelArg, sandbox, json: args.includes("--json") }) + "\\n");
+appendFileSync(join(process.cwd(), ".codexlooper", "model-runs.jsonl"), JSON.stringify({ modelArg, sandbox, json: args.includes("--json"), outputSchema: args.includes("--output-schema") }) + "\\n");
 
 if (!args.includes("--json")) process.exit(34);
-let signal;
+let text;
 if (modelArg.includes("gpt-5.6-sol")) {
-  signal = "NO ISSUES FOUND";
+  text = "NO ISSUES FOUND";
 } else if (prompt.includes("Read the plan file at")) {
-  const planPath = join(process.cwd(), "docs", "plans", "fixture.md");
-  writeFileSync(join(process.cwd(), "result.txt"), "fixture-pass\\n");
-  writeFileSync(planPath, readFileSync(planPath, "utf8").replace("- [ ] Create", "- [x] Create"));
-  signal = "<<<RALPHEX:ALL_TASKS_DONE>>>";
-} else if (prompt.includes("External code review evaluation")) {
-  signal = "<<<RALPHEX:CODEX_REVIEW_DONE>>>";
+  const patch = [
+    "diff --git a/docs/plans/fixture.md b/docs/plans/fixture.md",
+    "--- a/docs/plans/fixture.md",
+    "+++ b/docs/plans/fixture.md",
+    "@@ -8,4 +8,4 @@",
+    " - " + String.fromCharCode(96) + "test -f result.txt" + String.fromCharCode(96),
+    " ",
+    " ### Task 1: Produce result",
+    "-- [ ] Create result.txt containing fixture-pass",
+    "+- [x] Create result.txt containing fixture-pass",
+    "diff --git a/result.txt b/result.txt",
+    "new file mode 100644",
+    "--- /dev/null",
+    "+++ b/result.txt",
+    "@@ -0,0 +1 @@",
+    "+fixture-pass",
+    "",
+  ].join("\\n");
+  text = JSON.stringify({ version: 1, patch, signal: "<<<RALPHEX:ALL_TASKS_DONE>>>", summary: "Completed fixture through a host-applied patch." });
 } else {
-  signal = "<<<RALPHEX:REVIEW_DONE>>>";
+  text = JSON.stringify({ version: 1, patch: "", signal: "<<<RALPHEX:REVIEW_DONE>>>", summary: "No review findings." });
 }
-console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: signal } }));
+console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } }));
 console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1000, cached_input_tokens: 400, cache_write_input_tokens: 0, output_tokens: 200, reasoning_output_tokens: 50 } }));
 `,
   );
@@ -128,12 +141,20 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeCodexSource)} "$@"
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
-  assert.ok(runs.some((entry) => entry.modelArg.includes("gpt-5.6-terra") && entry.sandbox === "workspace-write"));
+  assert.ok(
+    runs.some(
+      (entry) =>
+        entry.modelArg.includes("gpt-5.6-terra") &&
+        entry.sandbox === "read-only" &&
+        entry.outputSchema,
+    ),
+  );
   assert.ok(runs.some((entry) => entry.modelArg.includes("gpt-5.6-sol") && entry.sandbox === "read-only"));
   assert.ok(runs.every((entry) => entry.json === true));
 
-  const runEntries = readdirSync(join(project, ".codexlooper", "runs"), { withFileTypes: true })
-    .filter((entry) => entry.isDirectory());
+  const runEntries = readdirSync(join(project, ".codexlooper", "runs"), { withFileTypes: true }).filter(
+    (entry) => entry.isDirectory(),
+  );
   assert.equal(runEntries.length, 1);
   const runDirectory = join(project, ".codexlooper", "runs", runEntries[0].name);
   const receipt = JSON.parse(readFileSync(join(runDirectory, "receipt.json"), "utf8"));
@@ -142,7 +163,8 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeCodexSource)} "$@"
   assert.ok(receipt.usage.profiles.builder.calls >= 1);
   assert.ok(receipt.usage.profiles.reviewer.calls >= 1);
   assert.ok(receipt.usage.totals.estimated_cost_usd > 0);
-  assert.match(readFileSync(join(runDirectory, "host-commits.jsonl"), "utf8"), /host-commit/);
+  const hostEvents = readFileSync(join(runDirectory, "host-commits.jsonl"), "utf8");
+  assert.match(hostEvents, /"transport":"structured_patch"/);
   assert.doesNotMatch(JSON.stringify(receipt), /closerouter_fixture_secret|GITHUB_TOKEN/);
 
   process.stdout.write("CODEXLOOPER_RALPHEX_E2E=PASS\n");
