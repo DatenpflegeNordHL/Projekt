@@ -7,6 +7,7 @@ import { prepareProfileLaunch } from "../src/profiles.mjs";
 import { translateCodexEvent } from "../src/claude-stream.mjs";
 
 const MAX_PROMPT_BYTES = 2_000_000;
+const MAX_STDERR_BYTES = 16_384;
 
 function fail(message) {
   throw new Error(message);
@@ -25,6 +26,15 @@ function validateArgs(args) {
 
 function emit(event) {
   process.stdout.write(`${JSON.stringify(event)}\n`);
+}
+
+function redactDiagnostic(value) {
+  let text = String(value || "");
+  const secret = process.env.CLOSEROUTER_API_KEY;
+  if (secret) text = text.replaceAll(secret, "[REDACTED]");
+  return text
+    .replace(/authorization\s*[:=]\s*bearer\s+[^\s,;]+/gi, "[REDACTED]")
+    .trim();
 }
 
 try {
@@ -76,7 +86,11 @@ try {
     emit(event);
   });
 
-  child.stderr.resume();
+  let stderrTail = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    stderrTail = `${stderrTail}${chunk}`.slice(-MAX_STDERR_BYTES);
+  });
 
   const exitCode = await new Promise((resolveExit, rejectExit) => {
     child.once("error", rejectExit);
@@ -91,10 +105,13 @@ try {
   await linesClosed;
 
   if (stdinError) fail(`Codex stdin failed: ${stdinError.message}`);
-  if (exitCode !== 0) fail(`Codex builder exited with status ${exitCode}`);
+  if (exitCode !== 0) {
+    const detail = redactDiagnostic(stderrTail);
+    fail(`Codex builder exited with status ${exitCode}${detail ? `: ${detail}` : ""}`);
+  }
   if (!messageEmitted) fail("Codex builder returned no translatable agent message");
   if (!resultEmitted) emit({ type: "result", result: "" });
 } catch (error) {
-  process.stderr.write(`CODEXLOOPER_TERRA_BLOCK: ${error.message}\n`);
+  process.stderr.write(`CODEXLOOPER_TERRA_BLOCK: ${redactDiagnostic(error.message)}\n`);
   process.exitCode = 1;
 }
