@@ -95,7 +95,7 @@ export function prepareProfileLaunch(
   if (json) args.push("--json");
   if (outputSchema) args.push("--output-schema", outputSchema);
   args.push("--ephemeral", "--sandbox", sandbox);
-  const legacyLandlock = sandbox === "workspace-write" && platform === "linux";
+  const legacyLandlock = platform === "linux";
   if (legacyLandlock) {
     args.push("-c", "use_legacy_landlock=true");
   }
