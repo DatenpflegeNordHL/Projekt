@@ -13,7 +13,9 @@ import { fileURLToPath } from "node:url";
 
 const THIS_FILE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(THIS_FILE), "..");
-const LAUNCHER = resolve(REPO_ROOT, "bin", "codex-closerouter.mjs");
+const NATIVE_LAUNCHER = resolve(REPO_ROOT, "bin", "codex-closerouter.mjs");
+const TERRA_ADAPTER = resolve(REPO_ROOT, "bin", "terra-as-claude.mjs");
+const SOL_REVIEW = resolve(REPO_ROOT, "bin", "sol-review.mjs");
 const PREFLIGHT = resolve(REPO_ROOT, "scripts", "preflight.mjs");
 const ALLOWED_REASONING = new Set(["low", "medium", "high"]);
 
@@ -101,6 +103,10 @@ function writeAtomic(path, content, mode = 0o600) {
   }
 }
 
+function wrapperScript({ realCodex, codexHome, allowedModels, builderModel, reviewModel, builderReasoning, reviewReasoning, entrypoint }) {
+  return `#!/bin/sh\nset -eu\nexport CODEXLOOPER_REAL_CODEX=${shellQuote(realCodex)}\nexport CODEX_HOME=${shellQuote(codexHome)}\nexport CODEXLOOPER_ALLOWED_MODELS=${shellQuote(allowedModels)}\nexport CODEXLOOPER_BUILDER_MODEL=${shellQuote(builderModel)}\nexport CODEXLOOPER_REVIEW_MODEL=${shellQuote(reviewModel)}\nexport CODEXLOOPER_BUILDER_REASONING=${shellQuote(builderReasoning)}\nexport CODEXLOOPER_REVIEW_REASONING=${shellQuote(reviewReasoning)}\nexec ${shellQuote(process.execPath)} ${shellQuote(entrypoint)} "$@"\n`;
+}
+
 export function install(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const project = resolve(args["--project"]);
@@ -138,6 +144,8 @@ export function install(argv = process.argv.slice(2)) {
   const binDir = resolve(home, "bin");
   const codexHome = resolve(home, "codex-home");
   const controlledCodex = resolve(binDir, "codex");
+  const terraExecutor = resolve(binDir, "terra-executor");
+  const solReviewer = resolve(binDir, "sol-review");
   const runCommand = resolve(binDir, "codexlooper");
   const ralphexConfig = resolve(project, ".ralphex", "config");
 
@@ -145,10 +153,20 @@ export function install(argv = process.argv.slice(2)) {
   writeAtomic(resolve(codexHome, "config.toml"), codexConfig, 0o600);
 
   const allowedModels = `${builderModel},${reviewModel}`;
-  const launcherScript = `#!/bin/sh\nset -eu\nexport CODEXLOOPER_REAL_CODEX=${shellQuote(realCodex)}\nexport CODEX_HOME=${shellQuote(codexHome)}\nexport CODEXLOOPER_ALLOWED_MODELS=${shellQuote(allowedModels)}\nexec ${shellQuote(process.execPath)} ${shellQuote(LAUNCHER)} "$@"\n`;
-  writeAtomic(controlledCodex, launcherScript, 0o700);
+  const wrapperOptions = {
+    realCodex,
+    codexHome,
+    allowedModels,
+    builderModel,
+    reviewModel,
+    builderReasoning,
+    reviewReasoning,
+  };
+  writeAtomic(controlledCodex, wrapperScript({ ...wrapperOptions, entrypoint: NATIVE_LAUNCHER }), 0o700);
+  writeAtomic(terraExecutor, wrapperScript({ ...wrapperOptions, entrypoint: TERRA_ADAPTER }), 0o700);
+  writeAtomic(solReviewer, wrapperScript({ ...wrapperOptions, entrypoint: SOL_REVIEW }), 0o700);
 
-  const config = `executor = codex\npass_claude_md = false\ncodex_command = ${iniValue(controlledCodex)}\nplan_model = ${iniValue(`${builderModel}:${builderReasoning}`)}\ntask_model = ${iniValue(`${builderModel}:${builderReasoning}`)}\nreview_model = ${iniValue(`${reviewModel}:${reviewReasoning}`)}\ncodex_model =\ncodex_reasoning_effort =\ncodex_timeout_ms = 3600000\ncodex_sandbox = workspace-write\nexternal_review_tool = none\nfinalize_enabled = false\nmove_plan_on_completion = true\ntask_retry_count = 1\nmax_iterations = 50\nreview_patience = 2\nsession_timeout = 1h\nidle_timeout = 10m\nplans_dir = docs/plans\n`;
+  const config = `claude_command = ${iniValue(terraExecutor)}\nclaude_args =\ntask_model =\nreview_model =\npreserve_anthropic_api_key = false\ncodex_enabled = false\nexternal_review_tool = custom\ncustom_review_script = ${iniValue(solReviewer)}\nfinalize_enabled = false\nmove_plan_on_completion = true\ntask_retry_count = 1\nmax_iterations = 50\nmax_external_iterations = 2\nreview_patience = 2\nsession_timeout = 1h\nidle_timeout = 10m\nplans_dir = docs/plans\n`;
   writeAtomic(ralphexConfig, config, 0o600);
 
   const preflightArgs = [
@@ -169,14 +187,16 @@ export function install(argv = process.argv.slice(2)) {
     ralphex_command: ralphexCommand,
     ralphex_version: ralphexVersionText,
     controlled_codex: controlledCodex,
+    terra_executor: terraExecutor,
+    sol_reviewer: solReviewer,
     run_command: runCommand,
     codex_home: codexHome,
-    builder: { model: builderModel, reasoning: builderReasoning },
-    reviewer: { model: reviewModel, reasoning: reviewReasoning },
+    builder: { model: builderModel, reasoning: builderReasoning, role: "implementation_and_fixes" },
+    reviewer: { model: reviewModel, reasoning: reviewReasoning, role: "read_only_findings" },
   };
   writeAtomic(resolve(home, "install-state.json"), `${JSON.stringify(state, null, 2)}\n`, 0o600);
 
-  return { runCommand, controlledCodex, ralphexConfig };
+  return { runCommand, controlledCodex, terraExecutor, solReviewer, ralphexConfig };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === THIS_FILE) {
