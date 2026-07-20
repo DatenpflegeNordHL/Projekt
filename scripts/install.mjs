@@ -17,7 +17,7 @@ const REPO_ROOT = resolve(dirname(THIS_FILE), "..");
 const NATIVE_LAUNCHER = resolve(REPO_ROOT, "bin", "codex-closerouter.mjs");
 const TERRA_ADAPTER = resolve(REPO_ROOT, "bin", "terra-as-claude.mjs");
 const SOL_REVIEW = resolve(REPO_ROOT, "bin", "sol-review.mjs");
-const PREFLIGHT = resolve(REPO_ROOT, "scripts", "preflight.mjs");
+const RUNNER = resolve(REPO_ROOT, "scripts", "run.mjs");
 const ALLOWED_REASONING = new Set(["low", "medium", "high"]);
 const REQUIRED_ARGUMENTS = ["--project", "--real-codex", "--mex-command", "--ralphex-command"];
 const ALLOWED_ARGUMENTS = new Set([
@@ -139,6 +139,19 @@ function wrapperScript({ realCodex, codexHome, allowedModels, builderModel, revi
   return `#!/bin/sh\nset -eu\nexport CODEXLOOPER_REAL_CODEX=${shellQuote(realCodex)}\nexport CODEX_HOME=${shellQuote(codexHome)}\nexport CODEXLOOPER_ALLOWED_MODELS=${shellQuote(allowedModels)}\nexport CODEXLOOPER_BUILDER_MODEL=${shellQuote(builderModel)}\nexport CODEXLOOPER_REVIEW_MODEL=${shellQuote(reviewModel)}\nexport CODEXLOOPER_BUILDER_REASONING=${shellQuote(builderReasoning)}\nexport CODEXLOOPER_REVIEW_REASONING=${shellQuote(reviewReasoning)}\nexec ${shellQuote(process.execPath)} ${shellQuote(entrypoint)} "$@"\n`;
 }
 
+function runWrapperScript({
+  project,
+  realCodex,
+  mexCommand,
+  ralphexCommand,
+  builderModel,
+  reviewModel,
+  builderReasoning,
+  reviewReasoning,
+}) {
+  return `#!/bin/sh\nset -eu\ncd ${shellQuote(project)}\nexport CODEXLOOPER_PROJECT=${shellQuote(project)}\nexport CODEXLOOPER_REAL_CODEX=${shellQuote(realCodex)}\nexport CODEXLOOPER_MEX_COMMAND=${shellQuote(mexCommand)}\nexport CODEXLOOPER_RALPHEX_COMMAND=${shellQuote(ralphexCommand)}\nexport CODEXLOOPER_BUILDER_MODEL=${shellQuote(builderModel)}\nexport CODEXLOOPER_REVIEW_MODEL=${shellQuote(reviewModel)}\nexport CODEXLOOPER_BUILDER_REASONING=${shellQuote(builderReasoning)}\nexport CODEXLOOPER_REVIEW_REASONING=${shellQuote(reviewReasoning)}\nexec ${shellQuote(process.execPath)} ${shellQuote(RUNNER)} "$@"\n`;
+}
+
 export function install(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const project = resolve(args["--project"]);
@@ -209,17 +222,23 @@ export function install(argv = process.argv.slice(2)) {
   const config = `claude_command = ${iniValue(terraExecutor)}\nclaude_args =\ntask_model =\nreview_model =\npreserve_anthropic_api_key = false\nexternal_review_tool = custom\ncustom_review_script = ${iniValue(solReviewer)}\nfinalize_enabled = false\nmove_plan_on_completion = true\ntask_retry_count = 1\nmax_iterations = 50\nmax_external_iterations = 2\nreview_patience = 2\nsession_timeout = 1h\nidle_timeout = 10m\nplans_dir = docs/plans\n`;
   writeAtomic(ralphexConfig, config, 0o600);
 
-  const preflightArgs = [
-    "--project", project,
-    "--mex-command", mexCommand,
-    "--real-codex", realCodex,
-    "--ralphex-command", ralphexCommand,
-  ].map(shellQuote).join(" ");
-  const runScript = `#!/bin/sh\nset -eu\ncd ${shellQuote(project)}\n${shellQuote(process.execPath)} ${shellQuote(PREFLIGHT)} ${preflightArgs}\nexec ${shellQuote(ralphexCommand)} "$@"\n`;
-  writeAtomic(runCommand, runScript, 0o700);
+  writeAtomic(
+    runCommand,
+    runWrapperScript({
+      project,
+      realCodex,
+      mexCommand,
+      ralphexCommand,
+      builderModel,
+      reviewModel,
+      builderReasoning,
+      reviewReasoning,
+    }),
+    0o700,
+  );
 
   const state = {
-    version: 1,
+    version: 2,
     project,
     real_codex: realCodex,
     codex_version: codexVersionText,
