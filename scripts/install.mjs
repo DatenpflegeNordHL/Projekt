@@ -18,6 +18,15 @@ const TERRA_ADAPTER = resolve(REPO_ROOT, "bin", "terra-as-claude.mjs");
 const SOL_REVIEW = resolve(REPO_ROOT, "bin", "sol-review.mjs");
 const PREFLIGHT = resolve(REPO_ROOT, "scripts", "preflight.mjs");
 const ALLOWED_REASONING = new Set(["low", "medium", "high"]);
+const REQUIRED_ARGUMENTS = ["--project", "--real-codex", "--mex-command", "--ralphex-command"];
+const ALLOWED_ARGUMENTS = new Set([
+  ...REQUIRED_ARGUMENTS,
+  "--builder-model",
+  "--review-model",
+  "--builder-reasoning",
+  "--review-reasoning",
+]);
+const MODEL_ID = /^[a-z0-9._-]+\/[a-z0-9._-]+$/i;
 
 function fail(message) {
   throw new Error(message);
@@ -33,8 +42,11 @@ function parseArgs(argv) {
   const seen = new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const key = argv[index];
-    if (!key.startsWith("--") || index + 1 >= argv.length) {
-      fail(`Invalid argument: ${key}`);
+    if (!ALLOWED_ARGUMENTS.has(key)) {
+      fail(`Unknown argument: ${key}`);
+    }
+    if (index + 1 >= argv.length || argv[index + 1].startsWith("--")) {
+      fail(`Missing value for argument: ${key}`);
     }
     if (seen.has(key)) {
       fail(`Duplicate argument: ${key}`);
@@ -43,7 +55,7 @@ function parseArgs(argv) {
     values[key] = argv[index + 1];
     index += 1;
   }
-  for (const key of ["--project", "--real-codex", "--mex-command", "--ralphex-command"]) {
+  for (const key of REQUIRED_ARGUMENTS) {
     if (!values[key]) fail(`Missing required argument: ${key}`);
   }
   return values;
@@ -128,7 +140,10 @@ export function install(argv = process.argv.slice(2)) {
   if (!ALLOWED_REASONING.has(builderReasoning) || !ALLOWED_REASONING.has(reviewReasoning)) {
     fail("Reasoning must be low, medium or high");
   }
-  if (!builderModel || !reviewModel || builderModel === reviewModel) {
+  if (!MODEL_ID.test(builderModel) || !MODEL_ID.test(reviewModel)) {
+    fail("Builder and reviewer models must use provider/model format");
+  }
+  if (builderModel === reviewModel) {
     fail("Builder and reviewer must use distinct explicit model IDs");
   }
 
@@ -138,7 +153,10 @@ export function install(argv = process.argv.slice(2)) {
   const codexVersionText = run(realCodex, ["--version"], project, "Codex version check");
   const codexVersion = parseVersion(codexVersionText, "Codex");
   if (!atLeast(codexVersion, [0, 130, 0])) fail("Codex CLI 0.130.0 or newer is required");
+
   const ralphexVersionText = run(ralphexCommand, ["--version"], project, "Ralphex version check");
+  const ralphexVersion = parseVersion(ralphexVersionText, "Ralphex");
+  if (!atLeast(ralphexVersion, [1, 6, 0])) fail("Ralphex 1.6.0 or newer is required");
 
   const home = resolve(project, ".codexlooper");
   const binDir = resolve(home, "bin");
