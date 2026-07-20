@@ -23,7 +23,17 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
       - name: Static checks and tests
-        run: npm run check
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run check 2>&1 | tee "test-node-${{ matrix.node-version }}.log"
+      - name: Upload test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-node-${{ matrix.node-version }}-diagnostics
+          path: test-node-${{ matrix.node-version }}.log
+          retention-days: 3
       - name: Diff hygiene
         run: git diff --check
 
@@ -45,6 +55,15 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Run real Ralphex offline fixture
         shell: bash
-        run: RALPHEX_BIN="$(command -v ralphex)" node tests/ralphex-e2e.mjs
+        run: |
+          set -o pipefail
+          RALPHEX_BIN="$(command -v ralphex)" node tests/ralphex-e2e.mjs 2>&1 | tee ralphex-e2e.log
+      - name: Upload Ralphex diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ralphex-e2e-diagnostics
+          path: ralphex-e2e.log
+          retention-days: 3
       - name: Diff hygiene
         run: git diff --check
