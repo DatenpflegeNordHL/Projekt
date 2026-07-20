@@ -1,0 +1,138 @@
+name: WP2 Bootstrap Pilot
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'feature/wp2-project-bootstrap'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+
+      - name: Detect authorized trigger
+        id: trigger
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if git show --pretty='' --name-only "$HEAD_SHA" | grep -Fxq '.github/wp2-bootstrap-trigger'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.trigger.outputs.run == 'true'
+        with:
+          node-version: 22
+
+      - uses: actions/setup-go@v5
+        if: steps.trigger.outputs.run == 'true'
+        with:
+          go-version: "1.26.x"
+
+      - name: Install verified toolchain
+        if: steps.trigger.outputs.run == 'true'
+        shell: bash
+        run: |
+          npm install --global @openai/codex@0.144.6 mex-agent@0.6.3 >/dev/null 2>&1
+          go install github.com/umputun/ralphex/cmd/ralphex@v1.6.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Create clean target repository
+        if: steps.trigger.outputs.run == 'true'
+        shell: bash
+        run: |
+          TARGET="$RUNNER_TEMP/codexlooper-wp2-target"
+          echo "TARGET=$TARGET" >> "$GITHUB_ENV"
+          mkdir -p "$TARGET"
+          git -C "$TARGET" init -b main
+          git -C "$TARGET" config user.name "CodexLooper WP2 Pilot"
+          git -C "$TARGET" config user.email "codexlooper-wp2@users.noreply.github.com"
+          printf '# Existing Target\n' > "$TARGET/README.md"
+          git -C "$TARGET" add README.md
+          git -C "$TARGET" commit -m 'chore: initialize target'
+
+      - name: Run real bootstrap
+        if: steps.trigger.outputs.run == 'true'
+        shell: bash
+        run: |
+          node "$GITHUB_WORKSPACE/scripts/bootstrap.mjs" \
+            --project "$TARGET" \
+            --real-codex "$(command -v codex)" \
+            --mex-command "$(command -v mex)" \
+            --ralphex-command "$(command -v ralphex)" \
+            > "$RUNNER_TEMP/wp2-bootstrap.log" 2>&1
+          grep -Fq 'CODEXLOOPER_BOOTSTRAP=PASS' "$RUNNER_TEMP/wp2-bootstrap.log"
+          test "$(cat "$TARGET/README.md")" = '# Existing Target'
+          test -f "$TARGET/AGENTS.md"
+          test -f "$TARGET/ROUTER.md"
+          test -f "$TARGET/PROJECT_SPEC.md"
+          test -f "$TARGET/context/project-state.md"
+          test -f "$TARGET/patterns/INDEX.md"
+          test -f "$TARGET/docs/plans/README.md"
+          test -f "$TARGET/.codexlooper/bootstrap.json"
+          test -x "$TARGET/.codexlooper/bin/codexlooper"
+          (cd "$TARGET" && mex check --json >/dev/null)
+
+      - name: Commit scaffold and prove idempotency
+        if: steps.trigger.outputs.run == 'true'
+        shell: bash
+        run: |
+          git -C "$TARGET" add .
+          git -C "$TARGET" commit -m 'chore: add CodexLooper scaffold'
+          node "$GITHUB_WORKSPACE/scripts/bootstrap.mjs" \
+            --project "$TARGET" \
+            --real-codex "$(command -v codex)" \
+            --mex-command "$(command -v mex)" \
+            --ralphex-command "$(command -v ralphex)" \
+            > "$RUNNER_TEMP/wp2-bootstrap-second.log" 2>&1
+          test -z "$(git -C "$TARGET" status --porcelain=v1 --untracked-files=all)"
+
+      - name: Write secret-free pilot summary
+        if: steps.trigger.outputs.run == 'true'
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { resolve } from "node:path";
+          const receipt = JSON.parse(readFileSync(resolve(process.env.TARGET, ".codexlooper", "bootstrap.json"), "utf8"));
+          if (receipt.status !== "completed" || receipt.visible_changes.length !== 0) {
+            throw new Error("Second bootstrap was not idempotent");
+          }
+          const summary = {
+            schema: "codexlooper.wp2-bootstrap-pilot.v1",
+            status: "PASS",
+            mex_score: receipt.mex_score,
+            project_name: receipt.project_name,
+            idempotent: true,
+            codex_version: "0.144.6",
+            mex_version: "0.6.3",
+            ralphex_version: "1.6.0",
+          };
+          writeFileSync(resolve(process.env.RUNNER_TEMP, "wp2-bootstrap-summary.json"), `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
+          console.log("CODEXLOOPER_WP2_BOOTSTRAP_PILOT=PASS");
+          NODE
+
+      - name: Upload bootstrap evidence
+        if: always() && steps.trigger.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: codexlooper-wp2-bootstrap-pilot
+          path: |
+            ${{ runner.temp }}/wp2-bootstrap-summary.json
+            ${{ env.TARGET }}/.codexlooper/bootstrap.json
+            ${{ runner.temp }}/wp2-bootstrap.log
+            ${{ runner.temp }}/wp2-bootstrap-second.log
+          if-no-files-found: warn
+          retention-days: 7
