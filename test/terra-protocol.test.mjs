@@ -49,7 +49,7 @@ test("Terra wrapper rejects a successful Codex stream with no agent message", ()
       },
     });
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /no structured agent message/);
+    assert.match(result.stderr, /no agent message/);
   } finally {
     rmSync(project, { recursive: true, force: true });
   }
