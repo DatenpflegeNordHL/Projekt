@@ -8,6 +8,11 @@ import {
   sanitizeCodexDiagnosticLine,
 } from "../src/codex-diagnostics.mjs";
 import { parseBuilderEnvelope } from "../src/builder-envelope.mjs";
+import {
+  captureBuilderSnapshotPatch,
+  cleanupBuilderSnapshot,
+  createBuilderSnapshot,
+} from "../src/builder-snapshot.mjs";
 import { applyBuilderPatch, superviseBuilderChanges } from "../src/git-supervisor.mjs";
 import { prepareProfileLaunch } from "../src/profiles.mjs";
 import { recordCodexUsageLine } from "../src/telemetry.mjs";
@@ -96,15 +101,16 @@ function structuredPatchGuidance(phase) {
     phase === "review"
       ? "Use REVIEW_DONE only when no issue exists. If you provide a fix patch, use an empty signal."
       : "Use ALL_TASKS_DONE only when the patch completes every actionable plan item. Otherwise use an empty signal.";
-  return `CodexLooper structured patch policy:
-- You are intentionally running in a read-only sandbox. Use read-only shell and file-inspection tools to inspect the plan and repository.
-- Never attempt apply_patch, file-writing shell commands, or Git-mutating commands.
+  return `CodexLooper isolated snapshot policy:
+- You are running inside a disposable clone of the repository. The real project is not writable from this session.
+- Use shell, file-inspection, tests, git status, git diff, and git log normally inside this snapshot.
+- You may edit files in the disposable snapshot when useful, but do not commit, branch, merge, reset, push, or alter Git metadata.
 - Your final response must be one plain JSON object, not markdown. Required fields are patch and signal. Optional fields are version, summary, and overview. No other fields are allowed.
-- patch must be an empty string or a standard textual git unified diff beginning with diff --git lines.
+- patch must be an empty string or a standard textual git unified diff beginning with diff --git lines. If you edited the snapshot, return the resulting git diff.
 - signal must be one of: empty string, <<<RALPHEX:ALL_TASKS_DONE>>>, <<<RALPHEX:REVIEW_DONE>>>, or <<<RALPHEX:TASK_FAILED>>> as allowed for the current phase.
 - Use only same-path file additions, deletions, and modifications. Do not emit renames, copies, binary patches, symlinks, submodules, quoted paths, or paths containing whitespace.
 - Every changed path must be permitted by the active plan. For task work, include the plan checkbox update in the patch.
-- The trusted host validates allowed paths, runs git apply --check, applies the patch, repeats validation commands, and creates the local commit.
+- The trusted host independently captures snapshot changes, validates allowed paths, runs git apply --check against the real project, repeats validation commands, and creates the local commit.
 - ${phaseSignal}
 - Use TASK_FAILED only when the task cannot be completed safely; TASK_FAILED requires an empty patch.
 - Current phase: ${phase}.`;
@@ -114,11 +120,12 @@ function reviewGuidance(internalReview) {
   if (!internalReview) return "";
   return `Ralphex review adapter for Codex:
 - Interpret review Task-tool instructions using Codex collaboration tools.
-- Launch requested review agents in parallel and keep them read-only.
+- Launch requested review agents in parallel inside the disposable snapshot.
 - Wait for all agents before collecting findings.
 - Return one final structured patch envelope from the primary agent only.\n\n`;
 }
 
+let snapshot;
 try {
   validateArgs(process.argv.slice(2));
   let prompt = readFileSync(0, "utf8");
@@ -130,15 +137,18 @@ try {
   const internalReview = prompt.includes("<<<RALPHEX:REVIEW_DONE>>>");
   const phase = internalReview ? "review" : "task";
   prompt = `${structuredPatchGuidance(phase)}\n\n${reviewGuidance(internalReview)}${prompt}`;
+  snapshot = createBuilderSnapshot();
 
   const launch = prepareProfileLaunch("builder", {
     json: true,
     multiAgent: internalReview,
-    sandbox: "read-only",
+    sandbox: "workspace-write",
+    sourceEnv: snapshot.env,
+    projectRoot: snapshot.root,
   });
 
   const child = spawn(launch.command, launch.args, {
-    cwd: process.cwd(),
+    cwd: snapshot.root,
     env: launch.env,
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -215,6 +225,7 @@ try {
   }
   if (agentMessages.length === 0) fail("Codex builder returned no structured agent message");
 
+  const snapshotPatch = captureBuilderSnapshotPatch({ snapshot });
   let envelope;
   try {
     envelope = parseBuilderEnvelope(agentMessages.at(-1), phase);
@@ -224,14 +235,17 @@ try {
   }
   let supervised = { committed: false };
   if (envelope.signal !== "<<<RALPHEX:TASK_FAILED>>>") {
-    supervised = envelope.legacy_worktree
-      ? superviseBuilderChanges({ phase })
-      : applyBuilderPatch({ patch: envelope.patch, phase });
+    const effectivePatch = envelope.patch.trim() ? envelope.patch : snapshotPatch;
+    supervised = effectivePatch.trim()
+      ? applyBuilderPatch({ patch: effectivePatch, phase })
+      : envelope.legacy_worktree
+        ? superviseBuilderChanges({ phase })
+        : { committed: false };
   }
   if (envelope.summary) emitText(`${envelope.summary}\n`);
   if (supervised.committed) {
     emitText(
-      `CodexLooper host commit ${supervised.commit.slice(0, 12)} created after patch, policy, and validation checks.\n`,
+      `CodexLooper host commit ${supervised.commit.slice(0, 12)} created after isolated patch, policy, and validation checks.\n`,
     );
   }
   if (envelope.signal) emitText(`${envelope.signal}\n`);
@@ -242,4 +256,12 @@ try {
   emit({ type: "result", result: "" });
   process.stderr.write(`${diagnostic}\n`);
   process.exitCode = 1;
+} finally {
+  try {
+    cleanupBuilderSnapshot({ snapshot });
+  } catch (error) {
+    const diagnostic = `CODEXLOOPER_SNAPSHOT_CLEANUP_BLOCK: ${redactDiagnostic(error.message)}`;
+    process.stderr.write(`${diagnostic}\n`);
+    process.exitCode = 1;
+  }
 }
