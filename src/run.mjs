@@ -13,6 +13,7 @@ import {
 import { spawn, spawnSync } from "node:child_process";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { runPreflight } from "../scripts/preflight.mjs";
+import { ensurePrivateDirectoryChain } from "./runtime-paths.mjs";
 import { aggregateUsage, readUsageEvents } from "./telemetry.mjs";
 
 const MAX_PLAN_BYTES = 2_000_000;
@@ -144,17 +145,10 @@ function ensureCleanTrackedPlan(projectRoot, planRelative) {
 }
 
 function privateRunDirectory(projectRoot, id) {
-  const runsRoot = resolve(projectRoot, ".codexlooper", "runs");
-  mkdirSync(runsRoot, { recursive: true, mode: 0o700 });
-  const stat = lstatSync(runsRoot);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
-    fail("CODEXLOOPER_RUN_DIR_INVALID", ".codexlooper/runs must be a real directory");
-  }
+  const runsRoot = ensurePrivateDirectoryChain(projectRoot, [".codexlooper", "runs"]);
   const target = resolve(runsRoot, id);
   if (existsSync(target)) fail("CODEXLOOPER_RUN_ID_COLLISION", "Run directory already exists");
-  mkdirSync(target, { mode: 0o700 });
-  chmodSync(target, 0o700);
-  return target;
+  return ensurePrivateDirectoryChain(projectRoot, [".codexlooper", "runs", id]);
 }
 
 function ralphexEnvironment(sourceEnv, values) {
