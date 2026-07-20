@@ -3,7 +3,10 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { recordCodexDiagnosticLine } from "../src/codex-diagnostics.mjs";
+import {
+  recordCodexDiagnosticLine,
+  sanitizeCodexDiagnosticLine,
+} from "../src/codex-diagnostics.mjs";
 import { superviseBuilderChanges } from "../src/git-supervisor.mjs";
 import { prepareProfileLaunch } from "../src/profiles.mjs";
 import { translateCodexEvent } from "../src/claude-stream.mjs";
@@ -11,6 +14,8 @@ import { recordCodexUsageLine } from "../src/telemetry.mjs";
 
 const MAX_PROMPT_BYTES = 2_000_000;
 const MAX_STDERR_BYTES = 16_384;
+const MAX_TOOL_DIAGNOSTICS = 20;
+const MAX_TOOL_DIAGNOSTIC_TEXT = 8_000;
 const FAILURE_SIGNAL = /<<<RALPHEX:(?:TASK_)?FAILED>>>/;
 
 function fail(message) {
@@ -68,6 +73,21 @@ function hostGitGuidance(phase) {
 - Current phase: ${phase}.`;
 }
 
+function boundedToolDiagnostics(events) {
+  const relevant = events.filter((event) => {
+    if (event.type === "turn.failed" || event.type === "error") return true;
+    if (event.item_type === "command_execution" || event.item_type === "commandExecution") {
+      return event.status === "failed" || event.status === "declined" || event.exit_code !== 0;
+    }
+    if (event.item_type === "file_change" || event.item_type === "fileChange") {
+      return event.status === "failed" || event.status === "declined";
+    }
+    return event.item_type === "error";
+  });
+  const selected = (relevant.length > 0 ? relevant : events).slice(-8);
+  return JSON.stringify(selected).slice(-MAX_TOOL_DIAGNOSTIC_TEXT);
+}
+
 try {
   validateArgs(process.argv.slice(2));
   let prompt = readFileSync(0, "utf8");
@@ -115,13 +135,19 @@ try {
   let messageEmitted = false;
   let telemetryError;
   let agentText = "";
+  const toolDiagnostics = [];
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   const linesClosed = new Promise((resolveClose) => lines.once("close", resolveClose));
   lines.on("line", (line) => {
+    const diagnostic = sanitizeCodexDiagnosticLine(line, process.env.CLOSEROUTER_API_KEY);
+    if (diagnostic) {
+      toolDiagnostics.push(diagnostic);
+      if (toolDiagnostics.length > MAX_TOOL_DIAGNOSTICS) toolDiagnostics.shift();
+    }
     try {
       recordCodexDiagnosticLine(line);
     } catch {
-      // Diagnostics are optional and may never alter the execution result.
+      // Persistent diagnostics are optional and may never alter execution.
     }
     try {
       recordCodexUsageLine(line, launch.metadata);
@@ -166,7 +192,11 @@ try {
     fail(`Codex builder exited with status ${exitCode}${detail ? `: ${detail}` : ""}`);
   }
   if (!messageEmitted) fail("Codex builder returned no translatable agent message");
-  if (!FAILURE_SIGNAL.test(agentText)) {
+  if (FAILURE_SIGNAL.test(agentText)) {
+    if (toolDiagnostics.length > 0) {
+      emitText(`CodexLooper tool diagnostics: ${boundedToolDiagnostics(toolDiagnostics)}\n`);
+    }
+  } else {
     const supervised = superviseBuilderChanges({ phase });
     if (supervised.committed) {
       emitText(`CodexLooper host commit ${supervised.commit.slice(0, 12)} created after policy and validation checks.\n`);
