@@ -26,3 +26,25 @@ jobs:
         run: npm run check
       - name: Diff hygiene
         run: git diff --check
+
+  ralphex-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+      - name: Install Ralphex v1.6.0
+        shell: bash
+        run: |
+          go install github.com/umputun/ralphex/cmd/ralphex@v1.6.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Run real Ralphex offline fixture
+        shell: bash
+        run: RALPHEX_BIN="$(command -v ralphex)" node tests/ralphex-e2e.mjs
+      - name: Diff hygiene
+        run: git diff --check
