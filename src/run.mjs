@@ -77,6 +77,10 @@ function git(projectRoot, args, label) {
   return result.stdout.trim();
 }
 
+function gitStatus(projectRoot, label) {
+  return git(projectRoot, ["status", "--porcelain=v1", "--untracked-files=normal"], label);
+}
+
 function writeAtomic(path, content, mode = 0o600) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.tmp-${process.pid}`;
@@ -140,7 +144,7 @@ function validatePlan(projectRoot, supplied) {
 
 function ensureCleanTrackedPlan(projectRoot, planRelative) {
   git(projectRoot, ["ls-files", "--error-unmatch", "--", planRelative], "Tracked plan check");
-  const status = git(projectRoot, ["status", "--porcelain=v1", "--untracked-files=normal"], "Git status check");
+  const status = gitStatus(projectRoot, "Git status check");
   if (status) fail("CODEXLOOPER_WORKTREE_DIRTY", "Project worktree must be clean before a run");
 }
 
@@ -253,6 +257,7 @@ export async function runProject({
     checks: {
       preflight: false,
       clean_before: true,
+      clean_after_preflight: false,
       clean_after: false,
       plan_completed: false,
       builder_usage_present: false,
@@ -276,6 +281,11 @@ export async function runProject({
     ]);
     receipt.checks.preflight = preflight === "CODEXLOOPER_PREFLIGHT=PASS";
     process.stdout.write(`${preflight}\n`);
+    const postPreflightStatus = gitStatus(projectRoot, "Post-preflight Git status check");
+    receipt.checks.clean_after_preflight = postPreflightStatus.length === 0;
+    if (!receipt.checks.clean_after_preflight) {
+      fail("CODEXLOOPER_PREFLIGHT_DIRTY", "Preflight modified the project worktree");
+    }
 
     const childEnv = ralphexEnvironment(env, {
       CLOSEROUTER_API_KEY: secret,
@@ -292,11 +302,7 @@ export async function runProject({
     const headAfter = git(projectRoot, ["rev-parse", "HEAD"], "Final head check");
     receipt.head_after = headAfter;
     receipt.commits_created = countCommits(projectRoot, headBefore, headAfter);
-    const finalStatus = git(
-      projectRoot,
-      ["status", "--porcelain=v1", "--untracked-files=normal"],
-      "Final Git status check",
-    );
+    const finalStatus = gitStatus(projectRoot, "Final Git status check");
     receipt.checks.clean_after = finalStatus.length === 0;
     receipt.checks.plan_completed = existsSync(resolve(projectRoot, plan.completedRelative));
 
