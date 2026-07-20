@@ -6,6 +6,8 @@ import { createInterface } from "node:readline";
 import { prepareProfileLaunch } from "../src/profiles.mjs";
 import { translateCodexEvent } from "../src/claude-stream.mjs";
 
+const MAX_PROMPT_BYTES = 2_000_000;
+
 function fail(message) {
   throw new Error(message);
 }
@@ -29,6 +31,9 @@ try {
   validateArgs(process.argv.slice(2));
   let prompt = readFileSync(0, "utf8");
   if (!prompt.trim()) fail("Ralphex supplied an empty prompt");
+  if (Buffer.byteLength(prompt, "utf8") > MAX_PROMPT_BYTES) {
+    fail("Ralphex prompt exceeds the bounded adapter size");
+  }
 
   const internalReview = prompt.includes("<<<RALPHEX:REVIEW_DONE>>>");
   if (internalReview) {
@@ -55,11 +60,14 @@ try {
 
   child.stdin.end(prompt);
   let resultEmitted = false;
+  let messageEmitted = false;
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  const linesClosed = new Promise((resolveClose) => lines.once("close", resolveClose));
   lines.on("line", (line) => {
     const event = translateCodexEvent(line);
     if (!event) return;
     if (event.type === "result") resultEmitted = true;
+    if (event.type === "content_block_delta") messageEmitted = true;
     emit(event);
   });
 
@@ -75,8 +83,10 @@ try {
       resolveExit(code ?? 1);
     });
   });
+  await linesClosed;
 
   if (exitCode !== 0) fail(`Codex builder exited with status ${exitCode}`);
+  if (!messageEmitted) fail("Codex builder returned no translatable agent message");
   if (!resultEmitted) emit({ type: "result", result: "" });
 } catch (error) {
   process.stderr.write(`CODEXLOOPER_TERRA_BLOCK: ${error.message}\n`);
