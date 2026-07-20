@@ -12,6 +12,7 @@ import { ensurePrivateDirectoryChain } from "./runtime-paths.mjs";
 
 const MAX_PATCH_BYTES = 2_000_000;
 const MAX_SUMMARY_BYTES = 8_000;
+const EXPECTED_FIELDS = ["patch", "signal", "summary", "version"];
 const TASK_SIGNALS = new Set(["", "<<<RALPHEX:ALL_TASKS_DONE>>>", "<<<RALPHEX:TASK_FAILED>>>"]);
 const REVIEW_SIGNALS = new Set(["", "<<<RALPHEX:REVIEW_DONE>>>", "<<<RALPHEX:TASK_FAILED>>>"]);
 
@@ -69,8 +70,13 @@ export function parseBuilderEnvelope(text, phase) {
     fail("CODEXLOOPER_ENVELOPE_INVALID", "Builder response must be a JSON object");
   }
   const keys = Object.keys(value).sort();
-  if (keys.join(",") !== "patch,signal,summary,version") {
-    fail("CODEXLOOPER_ENVELOPE_INVALID", "Builder response contains unexpected fields");
+  if (keys.join(",") !== EXPECTED_FIELDS.join(",")) {
+    const missing = EXPECTED_FIELDS.filter((key) => !keys.includes(key));
+    const unexpected = keys.filter((key) => !EXPECTED_FIELDS.includes(key));
+    fail(
+      "CODEXLOOPER_ENVELOPE_INVALID",
+      `Builder response field mismatch; missing=${missing.join("|") || "none"}; unexpected=${unexpected.join("|") || "none"}`,
+    );
   }
   if (
     value.version !== 1 ||
