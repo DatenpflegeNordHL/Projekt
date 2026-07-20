@@ -143,16 +143,17 @@ function structuredPatchGuidance(phase) {
     phase === "review"
       ? "Use REVIEW_DONE only when no issue exists. If you provide a fix patch, use an empty signal."
       : "Use ALL_TASKS_DONE only when the patch completes every actionable plan item. Otherwise use an empty signal.";
-  return `CodexLooper isolated snapshot policy:
-- You are running inside a disposable clone of the repository. The real project is not writable from this session.
-- Use shell, file-inspection, tests, git status, git diff, and git log normally inside this snapshot.
-- You may edit files in the disposable snapshot when useful, but do not commit, branch, merge, reset, push, or alter Git metadata.
-- Your final response should be one plain JSON object, not markdown. Required fields are patch and signal. Optional fields are version, summary, and overview. No other fields are allowed.
-- patch must be an empty string or a standard textual git unified diff beginning with diff --git lines. If you edited the snapshot, return the resulting git diff.
+  return `CodexLooper read-only patch policy:
+- You are running inside a disposable read-only clone of the repository. The real project is never writable from this session.
+- Inspect files with read-only shell commands, git status, git diff, and git log. Do not execute commands that create caches, build artifacts, lockfiles, coverage files, or other worktree changes.
+- Never edit, create, delete, rename, copy, or chmod files. Never run git-mutating commands.
+- Construct the required textual git unified diff directly from the inspected file contents and return it in the patch field. Do not rely on tool-side file changes.
+- Your final response must be one plain JSON object, not markdown. Required fields are patch and signal. Optional fields are version, summary, and overview. No other fields are allowed.
+- patch must be an empty string or a standard textual git unified diff beginning with diff --git lines.
 - signal must be one of: empty string, <<<RALPHEX:ALL_TASKS_DONE>>>, <<<RALPHEX:REVIEW_DONE>>>, or <<<RALPHEX:TASK_FAILED>>> as allowed for the current phase.
 - Use only same-path file additions, deletions, and modifications. Do not emit renames, copies, binary patches, symlinks, submodules, quoted paths, or paths containing whitespace.
 - Every changed path must be permitted by the active plan. For task work, include the plan checkbox update in the patch.
-- The trusted host independently captures snapshot changes, validates allowed paths, runs git apply --check against the real project, repeats validation commands, creates the local commit, and determines completion from the actual plan state.
+- The trusted host validates allowed paths, runs git apply --check against the real project, applies the diff, repeats validation commands, and creates the local commit.
 - ${phaseSignal}
 - Use TASK_FAILED only when the task cannot be completed safely; TASK_FAILED requires an empty patch.
 - Current phase: ${phase}.`;
@@ -162,7 +163,7 @@ function reviewGuidance(internalReview) {
   if (!internalReview) return "";
   return `Ralphex review adapter for Codex:
 - Interpret review Task-tool instructions using Codex collaboration tools.
-- Launch requested review agents in parallel inside the disposable snapshot.
+- Launch requested review agents in parallel inside the read-only disposable snapshot.
 - Wait for all agents before collecting findings.
 - Return one final structured patch envelope from the primary agent only.\n\n`;
 }
@@ -184,7 +185,7 @@ try {
   const launch = prepareProfileLaunch("builder", {
     json: true,
     multiAgent: internalReview,
-    sandbox: "workspace-write",
+    sandbox: "read-only",
     sourceEnv: snapshot.env,
     projectRoot: snapshot.root,
   });
@@ -268,11 +269,12 @@ try {
   if (agentMessages.length === 0) fail("Codex builder returned no agent message");
 
   const snapshotPatch = captureBuilderSnapshotPatch({ snapshot });
+  if (snapshotPatch.trim()) fail("Read-only Codex builder modified the isolated snapshot");
   const envelope = parseEnvelopeMessages(agentMessages, phase, snapshotPatch);
   let supervised = { committed: false };
   let effectivePatch = "";
   if (envelope.signal !== "<<<RALPHEX:TASK_FAILED>>>") {
-    effectivePatch = envelope.patch.trim() ? envelope.patch : snapshotPatch;
+    effectivePatch = envelope.patch;
     supervised = effectivePatch.trim()
       ? applyBuilderPatch({ patch: effectivePatch, phase })
       : envelope.legacy_worktree
@@ -288,7 +290,7 @@ try {
   if (envelope.summary) emitText(`${envelope.summary}\n`);
   if (supervised.committed) {
     emitText(
-      `CodexLooper host commit ${supervised.commit.slice(0, 12)} created after isolated patch, policy, and validation checks.\n`,
+      `CodexLooper host commit ${supervised.commit.slice(0, 12)} created after read-only patch, policy, and validation checks.\n`,
     );
   }
   if (signal) emitText(`${signal}\n`);
