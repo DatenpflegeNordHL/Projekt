@@ -10,6 +10,7 @@ const baseEnv = {
 function taskArgs(model = "openai/gpt-5.6-terra") {
   return [
     "exec",
+    "--ephemeral",
     "--sandbox",
     "workspace-write",
     "-c",
@@ -32,6 +33,7 @@ test("accepts the bounded Ralphex task invocation", () => {
 test("accepts the separate Sol multi-agent review invocation", () => {
   const args = [
     "exec",
+    "--ephemeral",
     "-c",
     "features.multi_agent=true",
     "-c",
@@ -82,8 +84,16 @@ test("rejects unapproved models, duplicate overrides and missing required overri
     (error) => error.code === "CODEXLOOPER_DUPLICATE_OVERRIDE",
   );
   assert.throws(
-    () => parseCodexArgs(["exec", "--sandbox", "workspace-write"], baseEnv, projectRoot),
+    () => parseCodexArgs(["exec", "--ephemeral", "--sandbox", "workspace-write"], baseEnv, projectRoot),
     (error) => error.code === "CODEXLOOPER_REQUIRED_OVERRIDE_MISSING",
+  );
+});
+
+test("rejects non-ephemeral executions", () => {
+  const args = taskArgs().filter((value) => value !== "--ephemeral");
+  assert.throws(
+    () => parseCodexArgs(args, baseEnv, projectRoot),
+    (error) => error.code === "CODEXLOOPER_EPHEMERAL_REQUIRED",
   );
 });
 
