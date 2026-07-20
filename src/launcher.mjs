@@ -193,6 +193,9 @@ export function parseCodexArgs(args, sourceEnv = process.env, projectRoot = proc
     fail("CODEXLOOPER_ARGUMENTS_REJECTED", `Codex argument is not allowed: ${arg}`);
   }
 
+  if (!state.ephemeral) {
+    fail("CODEXLOOPER_EPHEMERAL_REQUIRED", "Codex executions must use --ephemeral");
+  }
   if (!ALLOWED_SANDBOXES.has(state.sandbox)) {
     fail("CODEXLOOPER_SANDBOX_REJECTED", `Sandbox is not allowed: ${state.sandbox ?? "missing"}`);
   }
