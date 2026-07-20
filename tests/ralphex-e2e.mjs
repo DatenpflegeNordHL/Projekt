@@ -20,7 +20,7 @@ if (!ralphex) throw new Error("RALPHEX_BIN is required");
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { encoding: "utf8", ...options });
-  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(result.status, 0, `${result.stdout || ""}\n${result.stderr || ""}`);
   return result;
 }
 
