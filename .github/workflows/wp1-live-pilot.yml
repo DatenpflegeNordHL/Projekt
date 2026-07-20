@@ -120,6 +120,7 @@ jobs:
           git -C "$PILOT" init -b main
           git -C "$PILOT" config user.name "CodexLooper WP1 Pilot"
           git -C "$PILOT" config user.email "codexlooper-pilot@users.noreply.github.com"
+          (cd "$PILOT" && mex setup)
           git -C "$PILOT" add .
           git -C "$PILOT" commit -m "chore: initialize WP1 pilot"
 
