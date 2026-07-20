@@ -1,0 +1,13 @@
+{
+  "name": "codexlooper",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "node --check src/launcher.mjs && node --check bin/codex-closerouter.mjs && node --check scripts/install.mjs && node --test",
+    "test": "node --test"
+  }
+}
