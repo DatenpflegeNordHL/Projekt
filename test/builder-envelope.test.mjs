@@ -14,8 +14,8 @@ import {
   parseBuilderEnvelope,
 } from "../src/builder-envelope.mjs";
 
-test("parses a bounded task patch envelope", () => {
-  const value = parseBuilderEnvelope(
+test("parses bounded full and minimal task patch envelopes", () => {
+  const full = parseBuilderEnvelope(
     JSON.stringify({
       version: 1,
       patch: "diff --git a/src/value.mjs b/src/value.mjs\n--- a/src/value.mjs\n+++ b/src/value.mjs\n@@ -1 +1 @@\n-old\n+new\n",
@@ -24,10 +24,17 @@ test("parses a bounded task patch envelope", () => {
     }),
     "task",
   );
-  assert.equal(value.version, 1);
-  assert.match(value.patch, /diff --git/);
-  assert.equal(value.signal, "<<<RALPHEX:ALL_TASKS_DONE>>>");
-  assert.equal(value.summary, "Implemented the task.");
+  assert.equal(full.version, 1);
+  assert.match(full.patch, /diff --git/);
+  assert.equal(full.signal, "<<<RALPHEX:ALL_TASKS_DONE>>>");
+  assert.equal(full.summary, "Implemented the task.");
+
+  const minimal = parseBuilderEnvelope(
+    JSON.stringify({ patch: "", signal: "", overview: "Still working." }),
+    "task",
+  );
+  assert.equal(minimal.version, 1);
+  assert.equal(minimal.summary, "Still working.");
 });
 
 test("rejects phase-invalid signals and patches attached to terminal failures", () => {
