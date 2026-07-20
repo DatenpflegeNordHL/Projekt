@@ -44,7 +44,7 @@ function createFixture(codexVersion = "0.130.0", ralphexVersion = "1.6.0") {
   writeFileSync(join(project, "ROUTER.md"), "# Router\n");
   writeFileSync(
     join(project, "docs", "plans", "fixture.md"),
-    "# Plan: Fixture\n\n### Task 1: Result\n- [ ] Create result.txt\n",
+    "# Plan: Fixture\n\n## Allowed paths\n- `result.txt`\n- `this plan file`\n\n## Validation Commands\n- `test -f docs/plans/fixture.md`\n\n### Task 1: Result\n- [ ] Create result.txt\n",
   );
 
   const codex = executable(
@@ -52,12 +52,13 @@ function createFixture(codexVersion = "0.130.0", ralphexVersion = "1.6.0") {
     `#!/bin/sh
 set -eu
 if [ "\${1:-}" = "--version" ]; then echo "codex-cli ${codexVersion}"; exit 0; fi
-printf '%s\n' "$@" > "$(pwd)/codex-args.txt"
+mkdir -p "$(pwd)/.codexlooper"
+printf '%s\n' "$@" > "$(pwd)/.codexlooper/codex-args.txt"
 [ -n "\${CLOSEROUTER_API_KEY:-}" ]
 [ -z "\${OPENAI_API_KEY:-}" ]
 [ -z "\${ANTHROPIC_API_KEY:-}" ]
 [ -z "\${GITHUB_TOKEN:-}" ]
-cat > "$(pwd)/codex-stdin.txt"
+cat > "$(pwd)/.codexlooper/codex-stdin.txt"
 case " $* " in
   *" --json "*)
     case " $* " in
@@ -85,6 +86,7 @@ if [ "\${1:-}" = "--version" ]; then echo 'ralphex ${ralphexVersion}'; exit 0; f
 printf '%s\n' "$@" > "$(pwd)/.codexlooper/ralphex-args.txt"
 [ -n "\${CLOSEROUTER_API_KEY:-}" ]
 [ -n "\${CODEXLOOPER_RUN_DIR:-}" ]
+[ -n "\${CODEXLOOPER_RUN_POLICY:-}" ]
 plan="$1"
 mkdir -p docs/plans/completed
 sed 's/- \[ \]/- [x]/g' "$plan" > "docs/plans/completed/$(basename "$plan")"
@@ -219,8 +221,11 @@ test("native controlled launcher preserves stdin and strips unrelated secrets", 
       },
     );
     assert.equal(invocation.status, 0, invocation.stderr);
-    assert.equal(readFileSync(join(fixture.project, "codex-stdin.txt"), "utf8"), "bounded task prompt");
-    const forwarded = readFileSync(join(fixture.project, "codex-args.txt"), "utf8");
+    assert.equal(
+      readFileSync(join(fixture.project, ".codexlooper", "codex-stdin.txt"), "utf8"),
+      "bounded task prompt",
+    );
+    const forwarded = readFileSync(join(fixture.project, ".codexlooper", "codex-args.txt"), "utf8");
     assert.match(forwarded, /^exec\n/);
     assert.match(forwarded, /--ephemeral/);
     assert.match(forwarded, /model="openai\/gpt-5\.6-terra"/);
@@ -264,7 +269,7 @@ test("Sol review is a separate JSON-mode read-only invocation with usage", () =>
     });
     assert.equal(invocation.status, 0, invocation.stderr);
     assert.equal(invocation.stdout, "NO ISSUES FOUND\n");
-    const forwarded = readFileSync(join(fixture.project, "codex-args.txt"), "utf8");
+    const forwarded = readFileSync(join(fixture.project, ".codexlooper", "codex-args.txt"), "utf8");
     assert.match(forwarded, /read-only/);
     assert.match(forwarded, /model="openai\/gpt-5\.6-sol"/);
     assert.match(forwarded, /--json/);
@@ -287,7 +292,10 @@ test("generated one-command run produces commit, completed plan and cost receipt
     assert.equal(run.status, 0, run.stderr);
     assert.match(run.stdout, /CODEXLOOPER_PREFLIGHT=PASS/);
     assert.match(run.stdout, /CODEXLOOPER_RUN=PASS/);
-    assert.equal(readFileSync(join(fixture.project, ".codexlooper", "ralphex-args.txt"), "utf8"), "docs/plans/fixture.md\n");
+    assert.equal(
+      readFileSync(join(fixture.project, ".codexlooper", "ralphex-args.txt"), "utf8"),
+      "docs/plans/fixture.md\n",
+    );
     assert.equal(readFileSync(join(fixture.project, "result.txt"), "utf8"), "fixture-pass\n");
     const runDirectory = onlyRunDirectory(fixture.project);
     const receipt = JSON.parse(readFileSync(join(runDirectory, "receipt.json"), "utf8"));
@@ -299,6 +307,7 @@ test("generated one-command run produces commit, completed plan and cost receipt
     assert.equal(receipt.usage.profiles.builder.calls, 1);
     assert.equal(receipt.usage.profiles.reviewer.calls, 1);
     assert.ok(receipt.usage.totals.estimated_cost_usd > 0);
+    assert.deepEqual(receipt.policy.validation_commands, ["test -f docs/plans/fixture.md"]);
     assert.doesNotMatch(JSON.stringify(receipt), /closerouter_test_secret|OPENAI_API_KEY|GITHUB_TOKEN/);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
