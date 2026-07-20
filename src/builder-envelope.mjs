@@ -12,7 +12,8 @@ import { ensurePrivateDirectoryChain } from "./runtime-paths.mjs";
 
 const MAX_PATCH_BYTES = 2_000_000;
 const MAX_SUMMARY_BYTES = 8_000;
-const EXPECTED_FIELDS = ["patch", "signal", "summary", "version"];
+const ALLOWED_FIELDS = ["overview", "patch", "signal", "summary", "version"];
+const REQUIRED_FIELDS = ["patch", "signal"];
 const TASK_SIGNALS = new Set(["", "<<<RALPHEX:ALL_TASKS_DONE>>>", "<<<RALPHEX:TASK_FAILED>>>"]);
 const REVIEW_SIGNALS = new Set(["", "<<<RALPHEX:REVIEW_DONE>>>", "<<<RALPHEX:TASK_FAILED>>>"]);
 
@@ -37,7 +38,7 @@ export function builderOutputSchema() {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     type: "object",
     additionalProperties: false,
-    required: ["version", "patch", "signal", "summary"],
+    required: ["patch", "signal"],
     properties: {
       version: { const: 1 },
       patch: { type: "string", maxLength: MAX_PATCH_BYTES },
@@ -51,6 +52,7 @@ export function builderOutputSchema() {
         ],
       },
       summary: { type: "string", maxLength: MAX_SUMMARY_BYTES },
+      overview: { type: "string", maxLength: MAX_SUMMARY_BYTES },
     },
   };
 }
@@ -70,26 +72,28 @@ export function parseBuilderEnvelope(text, phase) {
     fail("CODEXLOOPER_ENVELOPE_INVALID", "Builder response must be a JSON object");
   }
   const keys = Object.keys(value).sort();
-  if (keys.join(",") !== EXPECTED_FIELDS.join(",")) {
-    const missing = EXPECTED_FIELDS.filter((key) => !keys.includes(key));
-    const unexpected = keys.filter((key) => !EXPECTED_FIELDS.includes(key));
+  const missing = REQUIRED_FIELDS.filter((key) => !keys.includes(key));
+  const unexpected = keys.filter((key) => !ALLOWED_FIELDS.includes(key));
+  if (missing.length > 0 || unexpected.length > 0) {
     fail(
       "CODEXLOOPER_ENVELOPE_INVALID",
       `Builder response field mismatch; missing=${missing.join("|") || "none"}; unexpected=${unexpected.join("|") || "none"}`,
     );
   }
   if (
-    value.version !== 1 ||
+    (value.version !== undefined && value.version !== 1) ||
     typeof value.patch !== "string" ||
     typeof value.signal !== "string" ||
-    typeof value.summary !== "string"
+    (value.summary !== undefined && typeof value.summary !== "string") ||
+    (value.overview !== undefined && typeof value.overview !== "string")
   ) {
     fail("CODEXLOOPER_ENVELOPE_INVALID", "Builder response fields have invalid types");
   }
   if (byteLength(value.patch) > MAX_PATCH_BYTES) {
     fail("CODEXLOOPER_ENVELOPE_TOO_LARGE", "Builder patch exceeds the bounded size");
   }
-  if (byteLength(value.summary) > MAX_SUMMARY_BYTES || value.summary.includes("\0")) {
+  const summary = value.summary ?? value.overview ?? "";
+  if (byteLength(summary) > MAX_SUMMARY_BYTES || summary.includes("\0")) {
     fail("CODEXLOOPER_ENVELOPE_INVALID", "Builder summary is invalid or too large");
   }
   const allowedSignals = phase === "task" ? TASK_SIGNALS : REVIEW_SIGNALS;
@@ -106,7 +110,7 @@ export function parseBuilderEnvelope(text, phase) {
     version: 1,
     patch: value.patch,
     signal: value.signal,
-    summary: value.summary.trim(),
+    summary: summary.trim(),
   };
 }
 
