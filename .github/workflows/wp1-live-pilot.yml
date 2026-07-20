@@ -68,9 +68,11 @@ jobs:
           PILOT="$RUNNER_TEMP/codexlooper-wp1-pilot"
           PILOT_RAW_LOG="$RUNNER_TEMP/codexlooper-wp1-pilot-raw.log"
           PILOT_FAILURE_LOG="$RUNNER_TEMP/codexlooper-wp1-pilot-failure.log"
+          PILOT_DIAGNOSTIC_LOG="$RUNNER_TEMP/codexlooper-wp1-pilot-diagnostic.log"
           echo "PILOT=$PILOT" >> "$GITHUB_ENV"
           echo "PILOT_RAW_LOG=$PILOT_RAW_LOG" >> "$GITHUB_ENV"
           echo "PILOT_FAILURE_LOG=$PILOT_FAILURE_LOG" >> "$GITHUB_ENV"
+          echo "PILOT_DIAGNOSTIC_LOG=$PILOT_DIAGNOSTIC_LOG" >> "$GITHUB_ENV"
           mkdir -p "$PILOT/docs/plans" "$PILOT/context" "$PILOT/patterns" "$PILOT/.mex/events"
           cat > "$PILOT/AGENTS.md" <<'EOF'
           # Agent Instructions
@@ -156,6 +158,10 @@ jobs:
               git -C "$PILOT" status --porcelain=v1 --untracked-files=normal
               echo "GIT_STATUS_END"
             } | sed "s#${CLOSEROUTER_API_KEY}#[REDACTED]#g" > "$PILOT_FAILURE_LOG"
+            tail -c 24000 "$PILOT_RAW_LOG" \
+              | sed "s#${CLOSEROUTER_API_KEY}#[REDACTED]#g" \
+              | sed -E 's#(authorization[=:][[:space:]]*bearer[[:space:]]+)[^[:space:],;]+#\1[REDACTED]#Ig' \
+              > "$PILOT_DIAGNOSTIC_LOG"
             echo "CODEXLOOPER_WP1_PILOT=BLOCK: runner exited with status $status"
             cat "$PILOT_FAILURE_LOG"
             exit "$status"
@@ -214,5 +220,6 @@ jobs:
             ${{ env.PILOT }}/pilot-summary.json
             ${{ env.PILOT_TOOL_VERSIONS }}
             ${{ env.PILOT_FAILURE_LOG }}
+            ${{ env.PILOT_DIAGNOSTIC_LOG }}
           if-no-files-found: warn
           retention-days: 7
