@@ -11,11 +11,9 @@ import {
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { install } from "../scripts/install.mjs";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ralphex = process.env.RALPHEX_BIN;
 if (!ralphex) throw new Error("RALPHEX_BIN is required");
 
@@ -88,9 +86,9 @@ if (modelArg.includes("gpt-5.6-sol")) {
     "+fixture-pass",
     "",
   ].join("\\n");
-  text = JSON.stringify({ version: 1, patch, signal: "<<<RALPHEX:ALL_TASKS_DONE>>>", summary: "Completed fixture through a host-applied patch." });
+  text = JSON.stringify({ patch, signal: "<<<RALPHEX:ALL_TASKS_DONE>>>", overview: "Completed fixture through a host-applied patch." });
 } else {
-  text = JSON.stringify({ version: 1, patch: "", signal: "<<<RALPHEX:REVIEW_DONE>>>", summary: "No review findings." });
+  text = JSON.stringify({ patch: "", signal: "<<<RALPHEX:REVIEW_DONE>>>", overview: "No review findings." });
 }
 console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } }));
 console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1000, cached_input_tokens: 400, cache_write_input_tokens: 0, output_tokens: 200, reasoning_output_tokens: 50 } }));
@@ -146,7 +144,7 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeCodexSource)} "$@"
       (entry) =>
         entry.modelArg.includes("gpt-5.6-terra") &&
         entry.sandbox === "read-only" &&
-        entry.outputSchema,
+        entry.outputSchema === false,
     ),
   );
   assert.ok(runs.some((entry) => entry.modelArg.includes("gpt-5.6-sol") && entry.sandbox === "read-only"));
