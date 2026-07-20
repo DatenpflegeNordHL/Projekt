@@ -8,14 +8,9 @@ on:
         required: true
         type: boolean
         default: true
-  push:
-    branches:
-      - feature/wp0-integration
-    paths:
-      - .github/live-smoke-trigger
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: codexlooper-live-smoke
@@ -94,49 +89,25 @@ jobs:
           console.log(`CODEXLOOPER_REVIEW_REASONING=${state.reviewer.reasoning}`);
           console.log(`CODEXLOOPER_ALLOWED_MODELS=${state.builder.model},${state.reviewer.model}`);
           NODE
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.run_cli_smoke }}" = "false" ]; then
+          if [ "${{ inputs.run_cli_smoke }}" = "false" ]; then
             echo "CODEXLOOPER_RUN_CLI_SMOKE=0" >> "$GITHUB_ENV"
           else
             echo "CODEXLOOPER_RUN_CLI_SMOKE=1" >> "$GITHUB_ENV"
           fi
 
       - name: Run real Terra and Sol smoke
-        run: npm run live-smoke
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run live-smoke 2>&1 | tee live-smoke.log
 
-      - name: Upload redacted receipt
+      - name: Upload redacted receipt and diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: codexlooper-live-smoke-receipt
-          path: .codexlooper/live-smoke-receipt.json
+          name: codexlooper-live-smoke
+          path: |
+            .codexlooper/live-smoke-receipt.json
+            live-smoke.log
           if-no-files-found: warn
           retention-days: 7
-
-      - name: Publish redacted branch status
-        if: always() && github.event_name == 'push'
-        shell: bash
-        env:
-          LIVE_JOB_STATUS: ${{ job.status }}
-        run: |
-          mkdir -p .codexlooper
-          node --input-type=module <<'NODE'
-          import { existsSync, readFileSync, writeFileSync } from "node:fs";
-          const receiptPath = ".codexlooper/live-smoke-receipt.json";
-          const receipt = existsSync(receiptPath)
-            ? JSON.parse(readFileSync(receiptPath, "utf8"))
-            : null;
-          const status = {
-            schema: "codexlooper.live-smoke-status.v1",
-            created_at: new Date().toISOString(),
-            workflow_status: process.env.LIVE_JOB_STATUS,
-            receipt,
-          };
-          writeFileSync(
-            ".codexlooper/live-smoke-status.json",
-            `${JSON.stringify(status, null, 2)}\n`,
-            { mode: 0o600 },
-          );
-          NODE
-          git add -f .codexlooper/live-smoke-status.json
-          git commit -m "chore: record live smoke status"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
