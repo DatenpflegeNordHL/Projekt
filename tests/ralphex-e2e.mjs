@@ -46,14 +46,13 @@ try {
   writeFileSync(join(project, "ROUTER.md"), "# Router\nFixture tasks require only the plan.\n");
   writeFileSync(
     join(project, "docs", "plans", "fixture.md"),
-    "# Plan: Offline fixture\n\n## Validation Commands\n- `test -f result.txt`\n\n### Task 1: Produce result\n- [ ] Create result.txt containing fixture-pass\n",
+    "# Plan: Offline fixture\n\n## Allowed paths\n- `result.txt`\n- `this plan file`\n\n## Validation Commands\n- `test -f result.txt`\n\n### Task 1: Produce result\n- [ ] Create result.txt containing fixture-pass\n",
   );
 
   const fakeCodexSource = join(tools, "fake-codex.mjs");
   writeFileSync(
     fakeCodexSource,
     `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
 if (process.argv[2] === "--version") { console.log("codex-cli 0.130.0"); process.exit(0); }
@@ -74,13 +73,6 @@ if (modelArg.includes("gpt-5.6-sol")) {
   const planPath = join(process.cwd(), "docs", "plans", "fixture.md");
   writeFileSync(join(process.cwd(), "result.txt"), "fixture-pass\\n");
   writeFileSync(planPath, readFileSync(planPath, "utf8").replace("- [ ] Create", "- [x] Create"));
-  for (const command of [
-    ["add", "result.txt", "docs/plans/fixture.md"],
-    ["commit", "-m", "feat: complete offline fixture"],
-  ]) {
-    const result = spawnSync("/usr/bin/git", command, { cwd: process.cwd(), encoding: "utf8" });
-    if (result.status !== 0) { process.stderr.write(result.stderr); process.exit(33); }
-  }
   signal = "<<<RALPHEX:ALL_TASKS_DONE>>>";
 } else if (prompt.includes("External code review evaluation")) {
   signal = "<<<RALPHEX:CODEX_REVIEW_DONE>>>";
@@ -143,14 +135,14 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeCodexSource)} "$@"
   const runEntries = readdirSync(join(project, ".codexlooper", "runs"), { withFileTypes: true })
     .filter((entry) => entry.isDirectory());
   assert.equal(runEntries.length, 1);
-  const receipt = JSON.parse(
-    readFileSync(join(project, ".codexlooper", "runs", runEntries[0].name, "receipt.json"), "utf8"),
-  );
+  const runDirectory = join(project, ".codexlooper", "runs", runEntries[0].name);
+  const receipt = JSON.parse(readFileSync(join(runDirectory, "receipt.json"), "utf8"));
   assert.equal(receipt.status, "completed");
   assert.ok(receipt.commits_created >= 1);
   assert.ok(receipt.usage.profiles.builder.calls >= 1);
   assert.ok(receipt.usage.profiles.reviewer.calls >= 1);
   assert.ok(receipt.usage.totals.estimated_cost_usd > 0);
+  assert.match(readFileSync(join(runDirectory, "host-commits.jsonl"), "utf8"), /host-commit/);
   assert.doesNotMatch(JSON.stringify(receipt), /closerouter_fixture_secret|GITHUB_TOKEN/);
 
   process.stdout.write("CODEXLOOPER_RALPHEX_E2E=PASS\n");
