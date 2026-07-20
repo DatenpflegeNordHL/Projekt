@@ -12,7 +12,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.head.ref == 'feature/wp1-minimal-loop'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     env:
       CLOSEROUTER_API_KEY: ${{ secrets.CLOSEROUTER_API_KEY }}
     steps:
@@ -41,29 +41,25 @@ jobs:
       - name: Require CloseRouter credential
         if: steps.trigger.outputs.run == 'true'
         shell: bash
-        run: |
-          test -n "${CLOSEROUTER_API_KEY:-}"
+        run: test -n "${CLOSEROUTER_API_KEY:-}"
 
       - name: Install Codex CLI
         if: steps.trigger.outputs.run == 'true'
         shell: bash
         run: npm install --global @openai/codex@latest >/dev/null 2>&1
 
-      - name: Run provider and sandbox matrix
+      - name: Run corrected custom-provider write case
         if: steps.trigger.outputs.run == 'true'
         shell: bash
         run: |
           set -u
           MATRIX_ROOT="$RUNNER_TEMP/codex-provider-matrix"
-          mkdir -p "$MATRIX_ROOT"
-          export MATRIX_ROOT
+          REPO="$MATRIX_ROOT/repo-custom-write-cwd"
+          CODEX_HOME="$MATRIX_ROOT/custom-home"
+          mkdir -p "$REPO" "$CODEX_HOME"
+          chmod 700 "$CODEX_HOME"
 
-          CUSTOM_HOME="$MATRIX_ROOT/custom-home"
-          BUILTIN_HOME="$MATRIX_ROOT/builtin-home"
-          mkdir -p "$CUSTOM_HOME" "$BUILTIN_HOME"
-          chmod 700 "$CUSTOM_HOME" "$BUILTIN_HOME"
-
-          cat > "$CUSTOM_HOME/config.toml" <<'EOF'
+          cat > "$CODEX_HOME/config.toml" <<'EOF'
           model_provider = "closerouter"
 
           [model_providers.closerouter]
@@ -78,73 +74,29 @@ jobs:
           supports_websockets = false
           EOF
 
-          cat > "$BUILTIN_HOME/config.toml" <<'EOF'
-          model_provider = "openai"
-          openai_base_url = "https://api.closerouter.dev/v1"
-          EOF
+          git -C "$REPO" init -b main >/dev/null
+          git -C "$REPO" config user.name "CodexLooper Matrix"
+          git -C "$REPO" config user.email "matrix@example.invalid"
+          printf '# Matrix fixture\n' > "$REPO/README.md"
+          git -C "$REPO" add README.md
+          git -C "$REPO" commit -m 'chore: initialize matrix fixture' >/dev/null
 
-          : > "$MATRIX_ROOT/cases.tsv"
-
-          run_case() {
-            label="$1"
-            provider="$2"
-            sandbox="$3"
-            prompt="$4"
-            expected_file="$5"
-            repo="$MATRIX_ROOT/repo-$label"
-            home="$CUSTOM_HOME"
-            mkdir -p "$repo"
-            git -C "$repo" init -b main >/dev/null
-            git -C "$repo" config user.name "CodexLooper Matrix"
-            git -C "$repo" config user.email "matrix@example.invalid"
-            printf '# Matrix fixture\n' > "$repo/README.md"
-            git -C "$repo" add README.md
-            git -C "$repo" commit -m 'chore: initialize matrix fixture' >/dev/null
-
-            if [ "$provider" = "builtin" ]; then
-              home="$BUILTIN_HOME"
-            fi
-
-            set +e
-            if [ "$provider" = "builtin" ]; then
-              printf '%s' "$prompt" | env \
-                CODEX_HOME="$home" \
-                OPENAI_API_KEY="$CLOSEROUTER_API_KEY" \
-                CLOSEROUTER_API_KEY= \
-                timeout 150s codex exec --json --ephemeral --sandbox "$sandbox" \
-                  -c 'model="openai/gpt-5.6-terra"' \
-                  -c model_reasoning_effort=low \
-                  > "$MATRIX_ROOT/$label.jsonl" 2> "$MATRIX_ROOT/$label.stderr"
-            else
-              printf '%s' "$prompt" | env \
-                CODEX_HOME="$home" \
-                CLOSEROUTER_API_KEY="$CLOSEROUTER_API_KEY" \
-                OPENAI_API_KEY= \
-                timeout 150s codex exec --json --ephemeral --sandbox "$sandbox" \
-                  -c 'model="openai/gpt-5.6-terra"' \
-                  -c model_reasoning_effort=low \
-                  > "$MATRIX_ROOT/$label.jsonl" 2> "$MATRIX_ROOT/$label.stderr"
-            fi
-            status=$?
-            set -e
-
-            file_created=false
-            if [ "$expected_file" != "-" ] && [ -f "$repo/$expected_file" ]; then
-              file_created=true
-            fi
-            printf '%s\t%s\t%s\t%s\t%s\n' \
-              "$label" "$provider" "$sandbox" "$status" "$file_created" \
-              >> "$MATRIX_ROOT/cases.tsv"
-          }
-
-          run_case custom-read custom read-only \
-            'Return exactly MATRIX_READ_OK and do not use tools.' '-'
-          run_case custom-write custom workspace-write \
-            'Do not use git. Create matrix.txt containing exactly matrix-pass and then return MATRIX_WRITE_OK.' 'matrix.txt'
-          run_case builtin-read builtin read-only \
-            'Return exactly MATRIX_READ_OK and do not use tools.' '-'
-          run_case builtin-write builtin workspace-write \
-            'Do not use git. Create matrix.txt containing exactly matrix-pass and then return MATRIX_WRITE_OK.' 'matrix.txt'
+          set +e
+          (
+            cd "$REPO"
+            printf '%s' \
+              'Do not use git. Using a relative path, create matrix.txt containing exactly matrix-pass and then return MATRIX_WRITE_OK.' \
+              | env \
+                  CODEX_HOME="$CODEX_HOME" \
+                  CLOSEROUTER_API_KEY="$CLOSEROUTER_API_KEY" \
+                  OPENAI_API_KEY= \
+                  timeout 150s codex exec --json --ephemeral --sandbox workspace-write \
+                    -c 'model="openai/gpt-5.6-terra"' \
+                    -c model_reasoning_effort=low
+          ) > "$MATRIX_ROOT/custom-write-cwd.jsonl" 2> "$MATRIX_ROOT/custom-write-cwd.stderr"
+          status=$?
+          set -e
+          printf '%s\n' "$status" > "$MATRIX_ROOT/exit-code.txt"
 
       - name: Produce secret-free matrix result
         if: always() && steps.trigger.outputs.run == 'true'
@@ -154,45 +106,39 @@ jobs:
           import { existsSync, readFileSync, writeFileSync } from "node:fs";
           import { resolve } from "node:path";
 
-          const root = process.env.MATRIX_ROOT || resolve(process.env.RUNNER_TEMP, "codex-provider-matrix");
+          const root = resolve(process.env.RUNNER_TEMP, "codex-provider-matrix");
+          const repo = resolve(root, "repo-custom-write-cwd");
           const secret = process.env.CLOSEROUTER_API_KEY;
-          const rows = existsSync(resolve(root, "cases.tsv"))
-            ? readFileSync(resolve(root, "cases.tsv"), "utf8").trim().split("\n").filter(Boolean)
-            : [];
-          const results = rows.map((row) => {
-            const [label, provider, sandbox, rawStatus, rawFileCreated] = row.split("\t");
-            const stdoutPath = resolve(root, `${label}.jsonl`);
-            const stderrPath = resolve(root, `${label}.stderr`);
-            const stdout = existsSync(stdoutPath) ? readFileSync(stdoutPath, "utf8") : "";
-            const stderr = existsSync(stderrPath) ? readFileSync(stderrPath, "utf8") : "";
-            if ((secret && stdout.includes(secret)) || (secret && stderr.includes(secret))) {
-              throw new Error(`Credential leaked in ${label}`);
-            }
-            const events = stdout.split(/\r?\n/).filter(Boolean).flatMap((line) => {
-              try { return [JSON.parse(line)]; } catch { return []; }
-            });
-            const errors = events
-              .filter((event) => event.type === "error" || event.type === "turn.failed")
-              .map((event) => String(event.error?.message || event.message || "unknown").slice(-1000));
-            return {
-              label,
-              provider,
-              sandbox,
-              exit_code: Number(rawStatus),
-              turn_completed: events.some((event) => event.type === "turn.completed"),
-              file_created: rawFileCreated === "true",
-              errors,
-              stderr_tail: stderr.replaceAll(secret || "__NO_SECRET__", "[REDACTED]").slice(-1000),
-            };
+          const stdout = existsSync(resolve(root, "custom-write-cwd.jsonl"))
+            ? readFileSync(resolve(root, "custom-write-cwd.jsonl"), "utf8")
+            : "";
+          const stderr = existsSync(resolve(root, "custom-write-cwd.stderr"))
+            ? readFileSync(resolve(root, "custom-write-cwd.stderr"), "utf8")
+            : "";
+          if ((secret && stdout.includes(secret)) || (secret && stderr.includes(secret))) {
+            throw new Error("Credential leaked in provider matrix");
+          }
+          const events = stdout.split(/\r?\n/).filter(Boolean).flatMap((line) => {
+            try { return [JSON.parse(line)]; } catch { return []; }
           });
+          const errors = events
+            .filter((event) => event.type === "error" || event.type === "turn.failed")
+            .map((event) => String(event.error?.message || event.message || "unknown").slice(-1000));
+          const matrixPath = resolve(repo, "matrix.txt");
           const summary = {
-            schema: "codexlooper.provider-matrix.v1",
+            schema: "codexlooper.provider-matrix.v2",
             created_at: new Date().toISOString(),
-            codex_version: "0.144.6-or-current",
-            results,
+            provider: "custom",
+            sandbox: "workspace-write",
+            correct_cwd: true,
+            exit_code: Number(readFileSync(resolve(root, "exit-code.txt"), "utf8").trim()),
+            turn_completed: events.some((event) => event.type === "turn.completed"),
+            file_created: existsSync(matrixPath),
+            file_content_ok: existsSync(matrixPath) && readFileSync(matrixPath, "utf8").trim() === "matrix-pass",
+            errors,
+            stderr_tail: stderr.replaceAll(secret || "__NO_SECRET__", "[REDACTED]").slice(-1000),
           };
-          const path = resolve(root, "summary.json");
-          writeFileSync(path, `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
+          writeFileSync(resolve(root, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
           console.log(JSON.stringify(summary));
           NODE
 
