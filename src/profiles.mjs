@@ -1,8 +1,9 @@
-import { isAbsolute } from "node:path";
+import { lstatSync, realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import { buildChildEnv, resolveRealCodex } from "./launcher.mjs";
 
 const ALLOWED_REASONING = new Set(["low", "medium", "high"]);
-const ALLOWED_SANDBOXES = new Set(["read-only"]);
+const ALLOWED_SANDBOXES = new Set(["read-only", "workspace-write"]);
 
 function fail(code, message) {
   const error = new Error(message);
@@ -27,6 +28,32 @@ function profileValues(profile, sourceEnv) {
   }
 }
 
+function validateWorkspaceSnapshot(sourceEnv, projectRoot) {
+  const configuredSnapshot = sourceEnv.CODEXLOOPER_ISOLATED_SNAPSHOT;
+  const runDirectory = sourceEnv.CODEXLOOPER_RUN_DIR;
+  if (
+    typeof configuredSnapshot !== "string" ||
+    !isAbsolute(configuredSnapshot) ||
+    configuredSnapshot.includes("\0") ||
+    typeof runDirectory !== "string" ||
+    !isAbsolute(runDirectory) ||
+    runDirectory.includes("\0")
+  ) {
+    fail("CODEXLOOPER_SNAPSHOT_REQUIRED", "workspace-write requires a current isolated snapshot");
+  }
+  const snapshot = realpathSync(configuredSnapshot);
+  const project = realpathSync(projectRoot);
+  const snapshotsRoot = resolve(runDirectory, "snapshots");
+  const rel = relative(snapshotsRoot, snapshot);
+  if (snapshot !== project || !rel || rel.startsWith("..") || isAbsolute(rel)) {
+    fail("CODEXLOOPER_SNAPSHOT_REQUIRED", "workspace-write may target only the current isolated snapshot");
+  }
+  const stat = lstatSync(snapshot);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    fail("CODEXLOOPER_SNAPSHOT_REQUIRED", "isolated snapshot must be a regular directory");
+  }
+}
+
 export function prepareProfileLaunch(
   profile,
   {
@@ -45,6 +72,7 @@ export function prepareProfileLaunch(
   if (!ALLOWED_SANDBOXES.has(sandbox)) {
     fail("CODEXLOOPER_SANDBOX_REJECTED", `Sandbox is not allowed: ${sandbox}`);
   }
+  if (sandbox === "workspace-write") validateWorkspaceSnapshot(sourceEnv, projectRoot);
   if (
     outputSchema !== undefined &&
     (typeof outputSchema !== "string" || !isAbsolute(outputSchema) || outputSchema.includes("\0"))
@@ -90,6 +118,7 @@ export function prepareProfileLaunch(
       json,
       multi_agent: multiAgent,
       output_schema: outputSchema || null,
+      isolated_snapshot: sandbox === "workspace-write",
     },
   };
 }
