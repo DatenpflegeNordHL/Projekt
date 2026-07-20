@@ -48,18 +48,18 @@ jobs:
         shell: bash
         run: npm install --global @openai/codex@latest >/dev/null 2>&1
 
-      - name: Run corrected custom-provider write case
+      - name: Run custom-provider write case with explicit writable root
         if: steps.trigger.outputs.run == 'true'
         shell: bash
         run: |
           set -u
           MATRIX_ROOT="$RUNNER_TEMP/codex-provider-matrix"
-          REPO="$MATRIX_ROOT/repo-custom-write-cwd"
+          REPO="$MATRIX_ROOT/repo-custom-write-root"
           CODEX_HOME="$MATRIX_ROOT/custom-home"
           mkdir -p "$REPO" "$CODEX_HOME"
           chmod 700 "$CODEX_HOME"
 
-          cat > "$CODEX_HOME/config.toml" <<'EOF'
+          cat > "$CODEX_HOME/config.toml" <<EOF
           model_provider = "closerouter"
 
           [model_providers.closerouter]
@@ -72,6 +72,9 @@ jobs:
           stream_idle_timeout_ms = 60000
           requires_openai_auth = false
           supports_websockets = false
+
+          [sandbox_workspace_write]
+          writable_roots = ["$REPO"]
           EOF
 
           git -C "$REPO" init -b main >/dev/null
@@ -93,7 +96,7 @@ jobs:
                   timeout 150s codex exec --json --ephemeral --sandbox workspace-write \
                     -c 'model="openai/gpt-5.6-terra"' \
                     -c model_reasoning_effort=low
-          ) > "$MATRIX_ROOT/custom-write-cwd.jsonl" 2> "$MATRIX_ROOT/custom-write-cwd.stderr"
+          ) > "$MATRIX_ROOT/custom-write-root.jsonl" 2> "$MATRIX_ROOT/custom-write-root.stderr"
           status=$?
           set -e
           printf '%s\n' "$status" > "$MATRIX_ROOT/exit-code.txt"
@@ -107,13 +110,13 @@ jobs:
           import { resolve } from "node:path";
 
           const root = resolve(process.env.RUNNER_TEMP, "codex-provider-matrix");
-          const repo = resolve(root, "repo-custom-write-cwd");
+          const repo = resolve(root, "repo-custom-write-root");
           const secret = process.env.CLOSEROUTER_API_KEY;
-          const stdout = existsSync(resolve(root, "custom-write-cwd.jsonl"))
-            ? readFileSync(resolve(root, "custom-write-cwd.jsonl"), "utf8")
+          const stdout = existsSync(resolve(root, "custom-write-root.jsonl"))
+            ? readFileSync(resolve(root, "custom-write-root.jsonl"), "utf8")
             : "";
-          const stderr = existsSync(resolve(root, "custom-write-cwd.stderr"))
-            ? readFileSync(resolve(root, "custom-write-cwd.stderr"), "utf8")
+          const stderr = existsSync(resolve(root, "custom-write-root.stderr"))
+            ? readFileSync(resolve(root, "custom-write-root.stderr"), "utf8")
             : "";
           if ((secret && stdout.includes(secret)) || (secret && stderr.includes(secret))) {
             throw new Error("Credential leaked in provider matrix");
@@ -126,11 +129,11 @@ jobs:
             .map((event) => String(event.error?.message || event.message || "unknown").slice(-1000));
           const matrixPath = resolve(repo, "matrix.txt");
           const summary = {
-            schema: "codexlooper.provider-matrix.v2",
+            schema: "codexlooper.provider-matrix.v3",
             created_at: new Date().toISOString(),
             provider: "custom",
             sandbox: "workspace-write",
-            correct_cwd: true,
+            explicit_writable_root: true,
             exit_code: Number(readFileSync(resolve(root, "exit-code.txt"), "utf8").trim()),
             turn_completed: events.some((event) => event.type === "turn.completed"),
             file_created: existsSync(matrixPath),
@@ -140,6 +143,14 @@ jobs:
           };
           writeFileSync(resolve(root, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
           console.log(JSON.stringify(summary));
+          if (
+            summary.exit_code !== 0 ||
+            !summary.turn_completed ||
+            !summary.file_created ||
+            !summary.file_content_ok
+          ) {
+            process.exitCode = 1;
+          }
           NODE
 
       - name: Upload provider matrix summary
