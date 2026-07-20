@@ -14,14 +14,25 @@ function fail(message) {
 }
 
 function validateArgs(args) {
-  let printSeen = false;
-  for (const arg of args) {
-    if (arg === "--print" && !printSeen) {
-      printSeen = true;
+  const seen = new Set();
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (["--print", "--verbose", "--dangerously-skip-permissions"].includes(arg)) {
+      if (seen.has(arg)) fail(`Ralphex executor argument is duplicated: ${arg}`);
+      seen.add(arg);
+      continue;
+    }
+    if (arg === "--output-format") {
+      if (seen.has(arg) || args[index + 1] !== "stream-json") {
+        fail("Ralphex executor requires exactly --output-format stream-json");
+      }
+      seen.add(arg);
+      index += 1;
       continue;
     }
     fail(`Ralphex executor argument is not allowed: ${arg}`);
   }
+  if (!seen.has("--print")) fail("Ralphex executor requires --print mode");
 }
 
 function emit(event) {
