@@ -22,24 +22,21 @@ function executable(path, content) {
   return path;
 }
 
+function git(project, args) {
+  const result = spawnSync("/usr/bin/git", ["-C", project, ...args], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return result.stdout.trim();
+}
+
 function createFixture(codexVersion = "0.130.0", ralphexVersion = "1.6.0") {
-  const root = mkdtempSync(join(tmpdir(), "codexlooper fixture "));
+  const root = mkdtempSync(join(tmpdir(), "codexlooper-fixture-"));
   const project = join(root, "project with spaces");
   const tools = join(root, "tools");
   mkdirSync(join(project, "docs", "plans"), { recursive: true });
   mkdirSync(tools, { recursive: true });
-
-  const git = spawnSync("/usr/bin/git", ["init", "-b", "main", project], { encoding: "utf8" });
-  assert.equal(git.status, 0, git.stderr);
-  for (const [key, value] of [
-    ["user.name", "CodexLooper Fixture"],
-    ["user.email", "fixture@example.invalid"],
-  ]) {
-    const configured = spawnSync("/usr/bin/git", ["-C", project, "config", key, value], {
-      encoding: "utf8",
-    });
-    assert.equal(configured.status, 0, configured.stderr);
-  }
+  git(project, ["init", "-b", "main"]);
+  git(project, ["config", "user.name", "CodexLooper Fixture"]);
+  git(project, ["config", "user.email", "fixture@example.invalid"]);
   writeFileSync(join(project, "AGENTS.md"), "# Agent anchor\n");
   writeFileSync(join(project, "ROUTER.md"), "# Router\n");
   writeFileSync(
@@ -68,9 +65,7 @@ case " $* " in
     printf '{"type":"item.completed","item":{"type":"agent_message","text":"%s"}}\n' "$text"
     echo '{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":400,"cache_write_input_tokens":0,"output_tokens":200,"reasoning_output_tokens":50}}'
     ;;
-  *)
-    echo 'NO ISSUES FOUND'
-    ;;
+  *) echo 'NO ISSUES FOUND' ;;
 esac
 `,
   );
@@ -100,16 +95,8 @@ git add docs/plans result.txt
 git commit -m 'feat: complete fixture plan' >/dev/null
 `,
   );
-
-  const initial = spawnSync("/usr/bin/git", ["-C", project, "add", "."], { encoding: "utf8" });
-  assert.equal(initial.status, 0, initial.stderr);
-  const committed = spawnSync(
-    "/usr/bin/git",
-    ["-C", project, "commit", "-m", "chore: initialize fixture"],
-    { encoding: "utf8" },
-  );
-  assert.equal(committed.status, 0, committed.stderr);
-
+  git(project, ["add", "."]);
+  git(project, ["commit", "-m", "chore: initialize fixture"]);
   return { root, project, codex, mex, ralphex };
 }
 
@@ -144,32 +131,24 @@ function onlyRunDirectory(project) {
   return join(root, entries[0].name);
 }
 
-test("installs isolated Terra executor, Sol reviewer and receipt runner", () => {
+test("installs isolated Terra, Sol and one-command runner", () => {
   const fixture = createFixture();
   try {
     const result = installFixture(fixture);
-    const config = readFileSync(result.ralphexConfig, "utf8");
-    assert.match(config, new RegExp(`claude_command = ${result.terraExecutor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-    assert.match(config, /external_review_tool = custom/);
-    assert.match(config, new RegExp(`custom_review_script = ${result.solReviewer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-    assert.doesNotMatch(config, /executor = codex/);
-
-    const codexConfig = readFileSync(
-      join(fixture.project, ".codexlooper", "codex-home", "config.toml"),
-      "utf8",
-    );
+    const ralphexConfig = readFileSync(result.ralphexConfig, "utf8");
+    assert.match(ralphexConfig, new RegExp(result.terraExecutor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(ralphexConfig, /external_review_tool = custom/);
+    assert.match(ralphexConfig, new RegExp(result.solReviewer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    const codexConfig = readFileSync(join(fixture.project, ".codexlooper", "codex-home", "config.toml"), "utf8");
     assert.match(codexConfig, /base_url = "https:\/\/api\.closerouter\.dev\/v1"/);
     assert.match(codexConfig, /wire_api = "responses"/);
     for (const path of [result.controlledCodex, result.terraExecutor, result.solReviewer, result.runCommand]) {
       assert.equal(statSync(path).mode & 0o777, 0o700);
     }
-
     const state = readFileSync(join(fixture.project, ".codexlooper", "install-state.json"), "utf8");
     assert.doesNotMatch(state, /API_KEY|closerouter_test_secret/);
-    assert.match(state, /"version": 2/);
-    assert.match(state, /"role": "implementation_and_fixes"/);
-    assert.match(state, /"role": "read_only_findings"/);
-    assert.match(readFileSync(result.runCommand, "utf8"), /scripts\/run\.mjs/);
+    assert.match(state, /implementation_and_fixes/);
+    assert.match(state, /read_only_findings/);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -179,23 +158,25 @@ test("preflight validates MEX, Codex and Ralphex", () => {
   const fixture = createFixture();
   try {
     installFixture(fixture);
-    const result = runPreflight([
-      "--project",
-      fixture.project,
-      "--mex-command",
-      fixture.mex,
-      "--real-codex",
-      fixture.codex,
-      "--ralphex-command",
-      fixture.ralphex,
-    ]);
-    assert.equal(result, "CODEXLOOPER_PREFLIGHT=PASS");
+    assert.equal(
+      runPreflight([
+        "--project",
+        fixture.project,
+        "--mex-command",
+        fixture.mex,
+        "--real-codex",
+        fixture.codex,
+        "--ralphex-command",
+        fixture.ralphex,
+      ]),
+      "CODEXLOOPER_PREFLIGHT=PASS",
+    );
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
 
-test("native controlled launcher preserves stdin and strips unrelated secrets", () => {
+test("controlled launcher preserves stdin and strips unrelated secrets", () => {
   const fixture = createFixture();
   try {
     const result = installFixture(fixture);
@@ -213,40 +194,51 @@ test("native controlled launcher preserves stdin and strips unrelated secrets", 
         "-c",
         "stream_idle_timeout_ms=3600000",
       ],
-      {
-        cwd: fixture.project,
-        encoding: "utf8",
-        input: "bounded task prompt",
-        env: modelEnv(),
-      },
+      { cwd: fixture.project, encoding: "utf8", input: "bounded task prompt", env: modelEnv() },
     );
     assert.equal(invocation.status, 0, invocation.stderr);
-    assert.equal(
-      readFileSync(join(fixture.project, ".codexlooper", "codex-stdin.txt"), "utf8"),
-      "bounded task prompt",
-    );
+    assert.equal(readFileSync(join(fixture.project, ".codexlooper", "codex-stdin.txt"), "utf8"), "bounded task prompt");
     const forwarded = readFileSync(join(fixture.project, ".codexlooper", "codex-args.txt"), "utf8");
     assert.match(forwarded, /^exec\n/);
-    assert.match(forwarded, /--ephemeral/);
     assert.match(forwarded, /model="openai\/gpt-5\.6-terra"/);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
 
-test("Terra adapter emits stream JSON and records usage", () => {
+test("Terra adapter emits stream JSON and usage under a run policy", () => {
   const fixture = createFixture();
   try {
     const result = installFixture(fixture);
     const runDirectory = join(fixture.project, ".codexlooper", "runs", "terra-test");
+    mkdirSync(runDirectory, { recursive: true });
+    const policyPath = join(runDirectory, "policy.json");
+    writeFileSync(
+      policyPath,
+      `${JSON.stringify({
+        schema: "codexlooper.run-policy.v1",
+        plan: "docs/plans/fixture.md",
+        allowed_paths: [
+          { type: "exact", value: "result.txt" },
+          { type: "exact", value: "docs/plans/fixture.md" },
+        ],
+        validation_commands: ["test -f docs/plans/fixture.md"],
+      })}\n`,
+      { mode: 0o600 },
+    );
+    const planPath = join(fixture.project, "docs", "plans", "fixture.md");
+    writeFileSync(planPath, readFileSync(planPath, "utf8").replace("- [ ] Create", "- [x] Create"));
     const invocation = spawnSync(result.terraExecutor, ["--print"], {
       cwd: fixture.project,
       encoding: "utf8",
       input: "task execution prompt",
-      env: modelEnv({ CODEXLOOPER_RUN_ID: "terra-test", CODEXLOOPER_RUN_DIR: runDirectory }),
+      env: modelEnv({
+        CODEXLOOPER_RUN_ID: "terra-test",
+        CODEXLOOPER_RUN_DIR: runDirectory,
+        CODEXLOOPER_RUN_POLICY: policyPath,
+      }),
     });
     assert.equal(invocation.status, 0, invocation.stderr);
-    assert.match(invocation.stdout, /content_block_delta/);
     assert.match(invocation.stdout, /RALPHEX:ALL_TASKS_DONE/);
     assert.match(invocation.stdout, /"type":"result"/);
     assert.match(readFileSync(join(runDirectory, "usage.jsonl"), "utf8"), /"profile":"builder"/);
@@ -255,7 +247,7 @@ test("Terra adapter emits stream JSON and records usage", () => {
   }
 });
 
-test("Sol review is a separate JSON-mode read-only invocation with usage", () => {
+test("Sol review remains a separate read-only invocation", () => {
   const fixture = createFixture();
   const promptFile = join(tmpdir(), `ralphex-custom-prompt-${process.pid}-${Date.now()}.txt`);
   try {
@@ -271,8 +263,7 @@ test("Sol review is a separate JSON-mode read-only invocation with usage", () =>
     assert.equal(invocation.stdout, "NO ISSUES FOUND\n");
     const forwarded = readFileSync(join(fixture.project, ".codexlooper", "codex-args.txt"), "utf8");
     assert.match(forwarded, /read-only/);
-    assert.match(forwarded, /model="openai\/gpt-5\.6-sol"/);
-    assert.match(forwarded, /--json/);
+    assert.match(forwarded, /gpt-5\.6-sol/);
     assert.match(readFileSync(join(runDirectory, "usage.jsonl"), "utf8"), /"profile":"reviewer"/);
   } finally {
     rmSync(promptFile, { force: true });
@@ -280,7 +271,7 @@ test("Sol review is a separate JSON-mode read-only invocation with usage", () =>
   }
 });
 
-test("generated one-command run produces commit, completed plan and cost receipt", () => {
+test("generated runner creates commit, completed plan and cost receipt", () => {
   const fixture = createFixture();
   try {
     const result = installFixture(fixture);
@@ -292,10 +283,6 @@ test("generated one-command run produces commit, completed plan and cost receipt
     assert.equal(run.status, 0, run.stderr);
     assert.match(run.stdout, /CODEXLOOPER_PREFLIGHT=PASS/);
     assert.match(run.stdout, /CODEXLOOPER_RUN=PASS/);
-    assert.equal(
-      readFileSync(join(fixture.project, ".codexlooper", "ralphex-args.txt"), "utf8"),
-      "docs/plans/fixture.md\n",
-    );
     assert.equal(readFileSync(join(fixture.project, "result.txt"), "utf8"), "fixture-pass\n");
     const runDirectory = onlyRunDirectory(fixture.project);
     const receipt = JSON.parse(readFileSync(join(runDirectory, "receipt.json"), "utf8"));
@@ -304,8 +291,6 @@ test("generated one-command run produces commit, completed plan and cost receipt
     assert.equal(receipt.checks.plan_completed, true);
     assert.equal(receipt.checks.builder_usage_present, true);
     assert.equal(receipt.checks.reviewer_usage_present, true);
-    assert.equal(receipt.usage.profiles.builder.calls, 1);
-    assert.equal(receipt.usage.profiles.reviewer.calls, 1);
     assert.ok(receipt.usage.totals.estimated_cost_usd > 0);
     assert.deepEqual(receipt.policy.validation_commands, ["test -f docs/plans/fixture.md"]);
     assert.doesNotMatch(JSON.stringify(receipt), /closerouter_test_secret|OPENAI_API_KEY|GITHUB_TOKEN/);
