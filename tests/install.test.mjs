@@ -168,10 +168,10 @@ test("Terra adapter emits Claude-compatible stream JSON", () => {
 
 test("Sol review is a separate read-only model invocation", () => {
   const fixture = createFixture();
+  const promptFile = join(tmpdir(), `ralphex-custom-prompt-${process.pid}-${Date.now()}.txt`);
   try {
     const result = installFixture(fixture);
-    const promptFile = join(fixture.project, "sol-review-prompt.txt");
-    writeFileSync(promptFile, "Review the current diff and report verified findings.\n");
+    writeFileSync(promptFile, "Review the current diff and report verified findings.\n", { mode: 0o600 });
     const invocation = spawnSync(result.solReviewer, [promptFile], {
       cwd: fixture.project,
       encoding: "utf8",
@@ -184,6 +184,7 @@ test("Sol review is a separate read-only model invocation", () => {
     assert.match(forwarded, /model="openai\/gpt-5\.6-sol"/);
     assert.doesNotMatch(forwarded, /--json/);
   } finally {
+    rmSync(promptFile, { force: true });
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
