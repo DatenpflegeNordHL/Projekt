@@ -51,11 +51,48 @@ try {
   const fakeCodexSource = join(tools, "fake-codex.mjs");
   writeFileSync(
     fakeCodexSource,
-    `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";\nimport { spawnSync } from "node:child_process";\nimport { join } from "node:path";\n\nif (process.argv[2] === "--version") { console.log("codex-cli 0.130.0"); process.exit(0); }\nif (!process.env.CLOSEROUTER_API_KEY) process.exit(31);\nif (process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GITHUB_TOKEN) process.exit(32);\nconst args = process.argv.slice(2);\nconst prompt = readFileSync(0, "utf8");\nconst modelArg = args.find((value) => value.startsWith("model=\"")) || "model=unknown";\nconst sandboxIndex = args.indexOf("--sandbox");\nconst sandbox = sandboxIndex >= 0 ? args[sandboxIndex + 1] : "missing";\nappendFileSync(join(process.cwd(), "model-runs.jsonl"), JSON.stringify({ modelArg, sandbox, json: args.includes("--json") }) + "\\n");\n\nif (!args.includes("--json")) { console.log("NO ISSUES FOUND"); process.exit(0); }\nlet signal;\nif (prompt.includes("Read the plan file at")) {\n  const planPath = join(process.cwd(), "docs", "plans", "fixture.md");\n  writeFileSync(join(process.cwd(), "result.txt"), "fixture-pass\\n");\n  writeFileSync(planPath, readFileSync(planPath, "utf8").replace("- [ ] Create", "- [x] Create"));\n  for (const command of [\n    ["add", "result.txt", "docs/plans/fixture.md"],\n    ["commit", "-m", "feat: complete offline fixture"],\n  ]) {\n    const result = spawnSync("/usr/bin/git", command, { cwd: process.cwd(), encoding: "utf8" });\n    if (result.status !== 0) { process.stderr.write(result.stderr); process.exit(33); }\n  }\n  signal = "<<<RALPHEX:ALL_TASKS_DONE>>>";\n} else if (prompt.includes("External code review evaluation")) {\n  signal = "<<<RALPHEX:CODEX_REVIEW_DONE>>>";\n} else {\n  signal = "<<<RALPHEX:REVIEW_DONE>>>";\n}\nconsole.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: signal } }));\nconsole.log(JSON.stringify({ type: "turn.completed" }));\n`,
+    `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
+
+if (process.argv[2] === "--version") { console.log("codex-cli 0.130.0"); process.exit(0); }
+if (!process.env.CLOSEROUTER_API_KEY) process.exit(31);
+if (process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GITHUB_TOKEN) process.exit(32);
+const args = process.argv.slice(2);
+const prompt = readFileSync(0, "utf8");
+const modelArg = args.find((value) => value.startsWith('model="')) || "model=unknown";
+const sandboxIndex = args.indexOf("--sandbox");
+const sandbox = sandboxIndex >= 0 ? args[sandboxIndex + 1] : "missing";
+appendFileSync(join(process.cwd(), "model-runs.jsonl"), JSON.stringify({ modelArg, sandbox, json: args.includes("--json") }) + "\\n");
+
+if (!args.includes("--json")) { console.log("NO ISSUES FOUND"); process.exit(0); }
+let signal;
+if (prompt.includes("Read the plan file at")) {
+  const planPath = join(process.cwd(), "docs", "plans", "fixture.md");
+  writeFileSync(join(process.cwd(), "result.txt"), "fixture-pass\\n");
+  writeFileSync(planPath, readFileSync(planPath, "utf8").replace("- [ ] Create", "- [x] Create"));
+  for (const command of [
+    ["add", "result.txt", "docs/plans/fixture.md"],
+    ["commit", "-m", "feat: complete offline fixture"],
+  ]) {
+    const result = spawnSync("/usr/bin/git", command, { cwd: process.cwd(), encoding: "utf8" });
+    if (result.status !== 0) { process.stderr.write(result.stderr); process.exit(33); }
+  }
+  signal = "<<<RALPHEX:ALL_TASKS_DONE>>>";
+} else if (prompt.includes("External code review evaluation")) {
+  signal = "<<<RALPHEX:CODEX_REVIEW_DONE>>>";
+} else {
+  signal = "<<<RALPHEX:REVIEW_DONE>>>";
+}
+console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: signal } }));
+console.log(JSON.stringify({ type: "turn.completed" }));
+`,
   );
   const fakeCodex = executable(
     join(tools, "codex"),
-    `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeCodexSource)} "$@"\n`,
+    `#!/bin/sh
+exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeCodexSource)} "$@"
+`,
   );
   const mex = executable(
     join(tools, "mex"),
