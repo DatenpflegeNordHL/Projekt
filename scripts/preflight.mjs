@@ -1,6 +1,9 @@
 import { accessSync, constants, existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const THIS_FILE = fileURLToPath(import.meta.url);
 
 function fail(message) {
   throw new Error(message);
@@ -38,18 +41,19 @@ function requireExecutable(command, label) {
   }
 }
 
+function safeProbeEnv() {
+  const env = { DO_NOT_TRACK: "1" };
+  for (const key of ["HOME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TMP", "TEMP"]) {
+    if (process.env[key] !== undefined) env[key] = process.env[key];
+  }
+  return env;
+}
+
 function run(command, args, cwd, label) {
   const result = spawnSync(command, args, {
     cwd,
     encoding: "utf8",
-    env: {
-      HOME: process.env.HOME,
-      PATH: process.env.PATH,
-      LANG: process.env.LANG,
-      LC_ALL: process.env.LC_ALL,
-      TMPDIR: process.env.TMPDIR,
-      DO_NOT_TRACK: "1",
-    },
+    env: safeProbeEnv(),
   });
   if (result.error || result.status !== 0) {
     const detail = (result.stderr || result.stdout || result.error?.message || "unknown error").trim();
@@ -112,7 +116,7 @@ export function runPreflight(argv = process.argv.slice(2)) {
   return "CODEXLOOPER_PREFLIGHT=PASS";
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && resolve(process.argv[1]) === THIS_FILE) {
   try {
     process.stdout.write(`${runPreflight()}\n`);
   } catch (error) {
