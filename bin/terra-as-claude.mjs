@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { prepareProfileLaunch } from "../src/profiles.mjs";
 import { translateCodexEvent } from "../src/claude-stream.mjs";
+import { recordCodexUsageLine } from "../src/telemetry.mjs";
 
 const MAX_PROMPT_BYTES = 2_000_000;
 const MAX_STDERR_BYTES = 16_384;
@@ -87,9 +88,15 @@ try {
 
   let resultEmitted = false;
   let messageEmitted = false;
+  let telemetryError;
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   const linesClosed = new Promise((resolveClose) => lines.once("close", resolveClose));
   lines.on("line", (line) => {
+    try {
+      recordCodexUsageLine(line, launch.metadata);
+    } catch (error) {
+      telemetryError ||= error;
+    }
     const event = translateCodexEvent(line);
     if (!event) return;
     if (event.type === "result") resultEmitted = true;
@@ -116,6 +123,7 @@ try {
   await linesClosed;
 
   if (stdinError) fail(`Codex stdin failed: ${stdinError.message}`);
+  if (telemetryError) fail(`Codex usage telemetry failed: ${telemetryError.message}`);
   if (exitCode !== 0) {
     const detail = redactDiagnostic(stderrTail);
     fail(`Codex builder exited with status ${exitCode}${detail ? `: ${detail}` : ""}`);
