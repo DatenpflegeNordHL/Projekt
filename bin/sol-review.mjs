@@ -12,9 +12,21 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, dirname } from "node:path";
 import { prepareProfileLaunch } from "../src/profiles.mjs";
+import { recordCodexUsageLine } from "../src/telemetry.mjs";
+
+const MAX_STDERR_BYTES = 16_384;
 
 function fail(message) {
   throw new Error(message);
+}
+
+function redactDiagnostic(value) {
+  let text = String(value || "");
+  const secret = process.env.CLOSEROUTER_API_KEY;
+  if (secret) text = text.replaceAll(secret, "[REDACTED]");
+  return text
+    .replace(/authorization\s*[:=]\s*bearer\s+[^\s,;]+/gi, "[REDACTED]")
+    .trim();
 }
 
 function readRalphexPrompt(suppliedPath) {
@@ -52,6 +64,31 @@ function readRalphexPrompt(suppliedPath) {
   }
 }
 
+function parseReviewOutput(stdout, metadata) {
+  const messages = [];
+  let resultSeen = false;
+  for (const line of String(stdout || "").split(/\r?\n/).filter(Boolean)) {
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      fail("Sol review returned non-JSON output in JSON mode");
+    }
+    recordCodexUsageLine(line, metadata);
+    if (event?.type === "item.completed" && event?.item?.type === "agent_message") {
+      const text = typeof event.item.text === "string" ? event.item.text.trim() : "";
+      if (text) messages.push(text);
+    }
+    if (event?.type === "turn.completed") resultSeen = true;
+    if (event?.type === "turn.failed" || event?.type === "error") {
+      fail(`Sol review failed: ${event.error?.message || event.message || "unknown error"}`);
+    }
+  }
+  if (!resultSeen) fail("Sol review returned no completed turn");
+  if (messages.length === 0) fail("Sol review returned no agent message");
+  return messages.join("\n");
+}
+
 try {
   const args = process.argv.slice(2);
   if (args.length !== 1) {
@@ -60,7 +97,7 @@ try {
   const prompt = readRalphexPrompt(args[0]);
 
   const launch = prepareProfileLaunch("reviewer", {
-    json: false,
+    json: true,
     sandbox: "read-only",
   });
   const result = spawnSync(launch.command, launch.args, {
@@ -72,12 +109,12 @@ try {
   });
 
   if (result.error || result.status !== 0) {
-    fail(`Codex reviewer exited with status ${result.status ?? "unknown"}`);
+    const detail = redactDiagnostic(String(result.stderr || "").slice(-MAX_STDERR_BYTES));
+    fail(`Codex reviewer exited with status ${result.status ?? "unknown"}${detail ? `: ${detail}` : ""}`);
   }
-  const output = result.stdout.trim();
-  if (!output) fail("Sol review returned no output");
+  const output = parseReviewOutput(result.stdout, launch.metadata);
   process.stdout.write(`${output}\n`);
 } catch (error) {
-  process.stderr.write(`CODEXLOOPER_SOL_BLOCK: ${error.message}\n`);
+  process.stderr.write(`CODEXLOOPER_SOL_BLOCK: ${redactDiagnostic(error.message)}\n`);
   process.exitCode = 1;
 }

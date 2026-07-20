@@ -4,17 +4,16 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { install } from "../scripts/install.mjs";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ralphex = process.env.RALPHEX_BIN;
 if (!ralphex) throw new Error("RALPHEX_BIN is required");
 
@@ -45,15 +44,13 @@ try {
   writeFileSync(join(project, "ROUTER.md"), "# Router\nFixture tasks require only the plan.\n");
   writeFileSync(
     join(project, "docs", "plans", "fixture.md"),
-    "# Plan: Offline fixture\n\n## Validation Commands\n- `test -f result.txt`\n\n### Task 1: Produce result\n- [ ] Create result.txt containing fixture-pass\n",
+    "# Plan: Offline fixture\n\n## Allowed paths\n- `result.txt`\n- `this plan file`\n\n## Validation Commands\n- `test -f result.txt`\n\n### Task 1: Produce result\n- [ ] Create result.txt containing fixture-pass\n",
   );
 
   const fakeCodexSource = join(tools, "fake-codex.mjs");
   writeFileSync(
     fakeCodexSource,
-    `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+    `import { readFileSync } from "node:fs";
 
 if (process.argv[2] === "--version") { console.log("codex-cli 0.130.0"); process.exit(0); }
 if (!process.env.CLOSEROUTER_API_KEY) process.exit(31);
@@ -63,29 +60,36 @@ const prompt = readFileSync(0, "utf8");
 const modelArg = args.find((value) => value.startsWith('model="')) || "model=unknown";
 const sandboxIndex = args.indexOf("--sandbox");
 const sandbox = sandboxIndex >= 0 ? args[sandboxIndex + 1] : "missing";
-appendFileSync(join(process.cwd(), "model-runs.jsonl"), JSON.stringify({ modelArg, sandbox, json: args.includes("--json") }) + "\\n");
-
-if (!args.includes("--json")) { console.log("NO ISSUES FOUND"); process.exit(0); }
-let signal;
-if (prompt.includes("Read the plan file at")) {
-  const planPath = join(process.cwd(), "docs", "plans", "fixture.md");
-  writeFileSync(join(process.cwd(), "result.txt"), "fixture-pass\\n");
-  writeFileSync(planPath, readFileSync(planPath, "utf8").replace("- [ ] Create", "- [x] Create"));
-  for (const command of [
-    ["add", "result.txt", "docs/plans/fixture.md"],
-    ["commit", "-m", "feat: complete offline fixture"],
-  ]) {
-    const result = spawnSync("/usr/bin/git", command, { cwd: process.cwd(), encoding: "utf8" });
-    if (result.status !== 0) { process.stderr.write(result.stderr); process.exit(33); }
-  }
-  signal = "<<<RALPHEX:ALL_TASKS_DONE>>>";
-} else if (prompt.includes("External code review evaluation")) {
-  signal = "<<<RALPHEX:CODEX_REVIEW_DONE>>>";
+if (!args.includes("--json")) process.exit(34);
+let text;
+if (modelArg.includes("gpt-5.6-sol")) {
+  if (sandbox !== "read-only") process.exit(35);
+  text = "NO ISSUES FOUND";
+} else if (prompt.includes("Read the plan file at")) {
+  if (sandbox !== "read-only" || args.includes("--output-schema")) process.exit(36);
+  const patch = [
+    "diff --git a/result.txt b/result.txt",
+    "new file mode 100644",
+    "--- /dev/null",
+    "+++ b/result.txt",
+    "@@ -0,0 +1 @@",
+    "+fixture-pass",
+    "diff --git a/docs/plans/fixture.md b/docs/plans/fixture.md",
+    "--- a/docs/plans/fixture.md",
+    "+++ b/docs/plans/fixture.md",
+    "@@ -10,2 +10,2 @@",
+    " ### Task 1: Produce result",
+    "-- [ ] Create result.txt containing fixture-pass",
+    "+- [x] Create result.txt containing fixture-pass",
+    "",
+  ].join("\\n");
+  text = JSON.stringify({ patch, signal: "<<<RALPHEX:ALL_TASKS_DONE>>>", overview: "Returned a host-applied patch without writing the snapshot." });
 } else {
-  signal = "<<<RALPHEX:REVIEW_DONE>>>";
+  if (sandbox !== "read-only") process.exit(37);
+  text = JSON.stringify({ patch: "", signal: "<<<RALPHEX:REVIEW_DONE>>>", overview: "No review findings." });
 }
-console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: signal } }));
-console.log(JSON.stringify({ type: "turn.completed" }));
+console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } }));
+console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1000, cached_input_tokens: 400, cache_write_input_tokens: 0, output_tokens: 200, reasoning_output_tokens: 50 } }));
 `,
   );
   const fakeCodex = executable(
@@ -103,10 +107,14 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeCodexSource)} "$@"
   run("/usr/bin/git", ["-C", project, "commit", "-m", "chore: initialize fixture"]);
 
   const installed = install([
-    "--project", project,
-    "--real-codex", fakeCodex,
-    "--mex-command", mex,
-    "--ralphex-command", ralphex,
+    "--project",
+    project,
+    "--real-codex",
+    fakeCodex,
+    "--mex-command",
+    mex,
+    "--ralphex-command",
+    ralphex,
   ]);
 
   const result = run(installed.runCommand, ["docs/plans/fixture.md"], {
@@ -121,21 +129,26 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeCodexSource)} "$@"
     timeout: 120_000,
   });
 
-  assert.match(result.stdout + result.stderr, /all tasks completed|completed|success/i);
+  assert.match(result.stdout + result.stderr, /CODEXLOOPER_RUN=PASS/);
   assert.equal(readFileSync(join(project, "result.txt"), "utf8"), "fixture-pass\n");
-  assert.ok(
-    existsSync(join(project, "docs", "plans", "completed", "fixture.md")) ||
-      readFileSync(join(project, "docs", "plans", "fixture.md"), "utf8").includes("- [x]"),
-  );
+  assert.ok(existsSync(join(project, "docs", "plans", "completed", "fixture.md")));
 
-  const runs = readFileSync(join(project, "model-runs.jsonl"), "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
-  assert.ok(runs.some((entry) => entry.modelArg.includes("gpt-5.6-terra") && entry.sandbox === "workspace-write"));
-  assert.ok(runs.some((entry) => entry.modelArg.includes("gpt-5.6-sol") && entry.sandbox === "read-only"));
-  assert.ok(runs.some((entry) => entry.json === true));
-  assert.ok(runs.some((entry) => entry.json === false));
+  const runEntries = readdirSync(join(project, ".codexlooper", "runs"), { withFileTypes: true }).filter(
+    (entry) => entry.isDirectory(),
+  );
+  assert.equal(runEntries.length, 1);
+  const runDirectory = join(project, ".codexlooper", "runs", runEntries[0].name);
+  const receipt = JSON.parse(readFileSync(join(runDirectory, "receipt.json"), "utf8"));
+  assert.equal(receipt.status, "completed");
+  assert.ok(receipt.commits_created >= 1);
+  assert.ok(receipt.usage.profiles.builder.calls >= 1);
+  assert.ok(receipt.usage.profiles.reviewer.calls >= 1);
+  assert.ok(receipt.usage.totals.estimated_cost_usd > 0);
+  const hostEvents = readFileSync(join(runDirectory, "host-commits.jsonl"), "utf8");
+  assert.match(hostEvents, /"transport":"structured_patch"/);
+  assert.equal(existsSync(join(runDirectory, "snapshots")), true);
+  assert.deepEqual(readdirSync(join(runDirectory, "snapshots")), []);
+  assert.doesNotMatch(JSON.stringify(receipt), /closerouter_fixture_secret|GITHUB_TOKEN/);
 
   process.stdout.write("CODEXLOOPER_RALPHEX_E2E=PASS\n");
 } finally {

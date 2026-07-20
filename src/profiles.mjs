@@ -1,3 +1,5 @@
+import { lstatSync, realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import { buildChildEnv, resolveRealCodex } from "./launcher.mjs";
 
 const ALLOWED_REASONING = new Set(["low", "medium", "high"]);
@@ -26,14 +28,42 @@ function profileValues(profile, sourceEnv) {
   }
 }
 
+function validateWorkspaceSnapshot(sourceEnv, projectRoot) {
+  const configuredSnapshot = sourceEnv.CODEXLOOPER_ISOLATED_SNAPSHOT;
+  const runDirectory = sourceEnv.CODEXLOOPER_RUN_DIR;
+  if (
+    typeof configuredSnapshot !== "string" ||
+    !isAbsolute(configuredSnapshot) ||
+    configuredSnapshot.includes("\0") ||
+    typeof runDirectory !== "string" ||
+    !isAbsolute(runDirectory) ||
+    runDirectory.includes("\0")
+  ) {
+    fail("CODEXLOOPER_SNAPSHOT_REQUIRED", "workspace-write requires a current isolated snapshot");
+  }
+  const snapshot = realpathSync(configuredSnapshot);
+  const project = realpathSync(projectRoot);
+  const snapshotsRoot = resolve(runDirectory, "snapshots");
+  const rel = relative(snapshotsRoot, snapshot);
+  if (snapshot !== project || !rel || rel.startsWith("..") || isAbsolute(rel)) {
+    fail("CODEXLOOPER_SNAPSHOT_REQUIRED", "workspace-write may target only the current isolated snapshot");
+  }
+  const stat = lstatSync(snapshot);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    fail("CODEXLOOPER_SNAPSHOT_REQUIRED", "isolated snapshot must be a regular directory");
+  }
+}
+
 export function prepareProfileLaunch(
   profile,
   {
     json = false,
     multiAgent = false,
-    sandbox = profile === "reviewer" ? "read-only" : "workspace-write",
+    sandbox = "read-only",
+    outputSchema,
     sourceEnv = process.env,
     projectRoot = process.cwd(),
+    platform = process.platform,
   } = {},
 ) {
   const values = profileValues(profile, sourceEnv);
@@ -42,6 +72,13 @@ export function prepareProfileLaunch(
   }
   if (!ALLOWED_SANDBOXES.has(sandbox)) {
     fail("CODEXLOOPER_SANDBOX_REJECTED", `Sandbox is not allowed: ${sandbox}`);
+  }
+  if (sandbox === "workspace-write") validateWorkspaceSnapshot(sourceEnv, projectRoot);
+  if (
+    outputSchema !== undefined &&
+    (typeof outputSchema !== "string" || !isAbsolute(outputSchema) || outputSchema.includes("\0"))
+  ) {
+    fail("CODEXLOOPER_OUTPUT_SCHEMA_REJECTED", "Output schema must be an absolute path");
   }
 
   const allowedModels = new Set(
@@ -56,7 +93,12 @@ export function prepareProfileLaunch(
 
   const args = ["exec"];
   if (json) args.push("--json");
+  if (outputSchema) args.push("--output-schema", outputSchema);
   args.push("--ephemeral", "--sandbox", sandbox);
+  const legacyLandlock = platform === "linux";
+  if (legacyLandlock) {
+    args.push("-c", "use_legacy_landlock=true");
+  }
   if (multiAgent) {
     args.push("-c", "features.multi_agent=true");
   }
@@ -78,8 +120,11 @@ export function prepareProfileLaunch(
       model: values.model,
       reasoning: values.reasoning,
       sandbox,
+      sandbox_backend: legacyLandlock ? "legacy_landlock" : "platform_default",
       json,
       multi_agent: multiAgent,
+      output_schema: outputSchema || null,
+      isolated_snapshot: sandbox === "workspace-write",
     },
   };
 }

@@ -1,0 +1,225 @@
+name: WP1 Live Pilot
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pilot:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'feature/wp1-minimal-loop'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOSEROUTER_API_KEY: ${{ secrets.CLOSEROUTER_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+
+      - name: Detect authorized pilot trigger
+        id: trigger
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if git show --pretty='' --name-only "$HEAD_SHA" | grep -Fxq '.github/wp1-live-trigger'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.trigger.outputs.run == 'true'
+        with:
+          node-version: 22
+
+      - uses: actions/setup-go@v5
+        if: steps.trigger.outputs.run == 'true'
+        with:
+          go-version: "1.26.x"
+
+      - name: Require CloseRouter credential
+        if: steps.trigger.outputs.run == 'true'
+        shell: bash
+        run: |
+          if [ -z "${CLOSEROUTER_API_KEY:-}" ]; then
+            echo "CODEXLOOPER_WP1_PILOT=BLOCK: repository secret CLOSEROUTER_API_KEY is missing"
+            exit 1
+          fi
+
+      - name: Install verified toolchain
+        if: steps.trigger.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          npm install --global @openai/codex@latest mex-agent@0.6.3 > toolchain.log 2>&1
+          go install github.com/umputun/ralphex/cmd/ralphex@v1.6.0 >> toolchain.log 2>&1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Create bounded pilot repository
+        if: steps.trigger.outputs.run == 'true'
+        shell: bash
+        run: |
+          PILOT="$RUNNER_TEMP/codexlooper-wp1-pilot"
+          PILOT_RAW_LOG="$RUNNER_TEMP/codexlooper-wp1-pilot-raw.log"
+          PILOT_FAILURE_LOG="$RUNNER_TEMP/codexlooper-wp1-pilot-failure.log"
+          PILOT_DIAGNOSTIC_LOG="$RUNNER_TEMP/codexlooper-wp1-pilot-diagnostic.log"
+          echo "PILOT=$PILOT" >> "$GITHUB_ENV"
+          echo "PILOT_RAW_LOG=$PILOT_RAW_LOG" >> "$GITHUB_ENV"
+          echo "PILOT_FAILURE_LOG=$PILOT_FAILURE_LOG" >> "$GITHUB_ENV"
+          echo "PILOT_DIAGNOSTIC_LOG=$PILOT_DIAGNOSTIC_LOG" >> "$GITHUB_ENV"
+          mkdir -p "$PILOT/docs/plans" "$PILOT/context" "$PILOT/patterns" "$PILOT/.mex/events"
+          cat > "$PILOT/AGENTS.md" <<'EOF'
+          # Agent Instructions
+          Execute only the active plan. Do not use network access or add dependencies.
+          EOF
+          cat > "$PILOT/ROUTER.md" <<'EOF'
+          # Context Router
+          Load AGENTS.md, this file and the active plan only.
+          EOF
+          cat > "$PILOT/PROJECT_SPEC.md" <<'EOF'
+          # Project Spec
+          A dependency-free Node.js fixture proving one autonomous implementation and review cycle.
+          EOF
+          cat > "$PILOT/context/project-state.md" <<'EOF'
+          # State
+          Empty fixture awaiting one bounded implementation task.
+          EOF
+          cat > "$PILOT/patterns/INDEX.md" <<'EOF'
+          # Patterns
+          No reusable patterns yet.
+          EOF
+          printf '%s\n' '{"type":"decision","id":"pilot-scope","summary":"Dependency-free local fixture only"}' > "$PILOT/.mex/events/decisions.jsonl"
+          cat > "$PILOT/docs/plans/wp1-live-pilot.md" <<'EOF'
+          # Plan: WP1 Live Pilot
+
+          ## Goal
+
+          Implement and test one tiny dependency-free JavaScript module.
+
+          ## Allowed paths
+
+          - `package.json`
+          - `src/greeting.mjs`
+          - `test/greeting.test.mjs`
+          - this plan file
+
+          ## Validation Commands
+
+          - `npm test`
+
+          ### Task 1: Implement deterministic greeting
+
+          - [ ] Add a minimal package file whose test script runs Node's built-in test runner.
+          - [ ] Add `greeting(name)` that trims the name, returns `Hello, <name>!`, and throws `TypeError` for empty or non-string input.
+          - [ ] Add tests for a normal name, surrounding whitespace, empty input, and non-string input.
+          EOF
+          git -C "$PILOT" init -b main
+          git -C "$PILOT" config user.name "CodexLooper WP1 Pilot"
+          git -C "$PILOT" config user.email "codexlooper-pilot@users.noreply.github.com"
+          (cd "$PILOT" && mex setup)
+          (cd "$PILOT" && mex check --json >/dev/null)
+          git -C "$PILOT" add .
+          git -C "$PILOT" commit -m "chore: initialize WP1 pilot"
+
+      - name: Install CodexLooper into pilot
+        if: steps.trigger.outputs.run == 'true'
+        shell: bash
+        run: |
+          node "$GITHUB_WORKSPACE/scripts/install.mjs" \
+            --project "$PILOT" \
+            --real-codex "$(command -v codex)" \
+            --mex-command "$(command -v mex)" \
+            --ralphex-command "$(command -v ralphex)"
+          sed -i 's/max_iterations = 50/max_iterations = 10/' "$PILOT/.ralphex/config"
+          PILOT_TOOL_VERSIONS="$RUNNER_TEMP/codexlooper-wp1-tool-versions.txt"
+          echo "PILOT_TOOL_VERSIONS=$PILOT_TOOL_VERSIONS" >> "$GITHUB_ENV"
+          codex --version > "$PILOT_TOOL_VERSIONS"
+          mex --version >> "$PILOT_TOOL_VERSIONS" 2>/dev/null || mex commands >> "$PILOT_TOOL_VERSIONS"
+          ralphex --version >> "$PILOT_TOOL_VERSIONS"
+
+      - name: Run real one-command autonomous pilot
+        if: steps.trigger.outputs.run == 'true'
+        shell: bash
+        run: |
+          set +e
+          "$PILOT/.codexlooper/bin/codexlooper" docs/plans/wp1-live-pilot.md > "$PILOT_RAW_LOG" 2>&1
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            {
+              grep -E 'CODEXLOOPER_|BLOCK|failed|failure|error|exited|status' "$PILOT_RAW_LOG" | tail -n 120 || true
+              echo "GIT_STATUS_BEGIN"
+              git -C "$PILOT" status --porcelain=v1 --untracked-files=normal
+              echo "GIT_STATUS_END"
+            } | sed "s#${CLOSEROUTER_API_KEY}#[REDACTED]#g" > "$PILOT_FAILURE_LOG"
+            tail -c 24000 "$PILOT_RAW_LOG" \
+              | sed "s#${CLOSEROUTER_API_KEY}#[REDACTED]#g" \
+              | sed -E 's#(authorization[=:][[:space:]]*bearer[[:space:]]+)[^[:space:],;]+#\1[REDACTED]#Ig' \
+              > "$PILOT_DIAGNOSTIC_LOG"
+            echo "CODEXLOOPER_WP1_PILOT=BLOCK: runner exited with status $status"
+            cat "$PILOT_FAILURE_LOG"
+            exit "$status"
+          fi
+          grep -Fq 'CODEXLOOPER_RUN=PASS' "$PILOT_RAW_LOG"
+
+      - name: Verify receipt and product result
+        if: steps.trigger.outputs.run == 'true'
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+          import { resolve } from "node:path";
+          const pilot = process.env.PILOT;
+          const runsRoot = resolve(pilot, ".codexlooper", "runs");
+          const runs = readdirSync(runsRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+          if (runs.length !== 1) throw new Error(`Expected one run directory, found ${runs.length}`);
+          const receiptPath = resolve(runsRoot, runs[0].name, "receipt.json");
+          const raw = readFileSync(receiptPath, "utf8");
+          const receipt = JSON.parse(raw);
+          if (receipt.status !== "completed") throw new Error(`Receipt status is ${receipt.status}`);
+          if (receipt.commits_created < 1) throw new Error("No commit was created");
+          if (!receipt.checks?.clean_after_preflight) throw new Error("Preflight cleanliness gate failed");
+          if (!receipt.checks?.plan_completed || !receipt.checks?.clean_after) {
+            throw new Error("Completion or clean-worktree gate failed");
+          }
+          if ((receipt.usage?.profiles?.builder?.calls || 0) < 1) throw new Error("No Terra usage");
+          if ((receipt.usage?.profiles?.reviewer?.calls || 0) < 1) throw new Error("No Sol usage");
+          if (!(receipt.usage?.totals?.estimated_cost_usd > 0)) throw new Error("No positive cost estimate");
+          if (raw.includes(process.env.CLOSEROUTER_API_KEY)) throw new Error("Credential leaked into receipt");
+          const source = await import(`file://${resolve(pilot, "src", "greeting.mjs")}`);
+          if (source.greeting("  Monti  ") !== "Hello, Monti!") throw new Error("Product result is wrong");
+          writeFileSync(
+            resolve(pilot, "pilot-summary.json"),
+            `${JSON.stringify({
+              schema: "codexlooper.wp1-pilot.v1",
+              status: "PASS",
+              run_id: receipt.run_id,
+              commits_created: receipt.commits_created,
+              estimated_cost_usd: receipt.usage.totals.estimated_cost_usd,
+              builder_calls: receipt.usage.profiles.builder.calls,
+              reviewer_calls: receipt.usage.profiles.reviewer.calls,
+            }, null, 2)}\n`,
+            { mode: 0o600 },
+          );
+          console.log("CODEXLOOPER_WP1_PILOT=PASS");
+          NODE
+
+      - name: Upload secret-free pilot evidence
+        if: always() && steps.trigger.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: codexlooper-wp1-live-pilot
+          path: |
+            ${{ env.PILOT }}/.codexlooper/runs/*/receipt.json
+            ${{ env.PILOT }}/pilot-summary.json
+            ${{ env.PILOT_TOOL_VERSIONS }}
+            ${{ env.PILOT_FAILURE_LOG }}
+            ${{ env.PILOT_DIAGNOSTIC_LOG }}
+          if-no-files-found: warn
+          retention-days: 7
