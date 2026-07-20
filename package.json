@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "check": "node --check src/launcher.mjs && node --check bin/codex-closerouter.mjs && node --check scripts/install.mjs && node --test",
+    "check": "node --check src/launcher.mjs && node --check bin/codex-closerouter.mjs && node --check scripts/install.mjs && node --check scripts/preflight.mjs && node --test",
     "test": "node --test"
   }
 }
