@@ -189,7 +189,10 @@ try {
   if (telemetryError) fail(`Codex usage telemetry failed: ${telemetryError.message}`);
   if (exitCode !== 0) {
     const detail = redactDiagnostic(stderrTail);
-    fail(`Codex builder exited with status ${exitCode}${detail ? `: ${detail}` : ""}`);
+    const toolDetail = toolDiagnostics.length > 0 ? boundedToolDiagnostics(toolDiagnostics) : "";
+    fail(
+      `Codex builder exited with status ${exitCode}${detail ? `: ${detail}` : ""}${toolDetail ? `; diagnostics=${toolDetail}` : ""}`,
+    );
   }
   if (!messageEmitted) fail("Codex builder returned no translatable agent message");
   if (FAILURE_SIGNAL.test(agentText)) {
