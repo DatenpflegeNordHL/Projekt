@@ -11,7 +11,8 @@ import { spawnSync } from "node:child_process";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const THIS_FILE = fileURLToPath(import.meta.url);
+const REPO_ROOT = resolve(dirname(THIS_FILE), "..");
 const LAUNCHER = resolve(REPO_ROOT, "bin", "codex-closerouter.mjs");
 const PREFLIGHT = resolve(REPO_ROOT, "scripts", "preflight.mjs");
 const ALLOWED_REASONING = new Set(["low", "medium", "high"]);
@@ -27,14 +28,16 @@ function parseArgs(argv) {
     "--builder-reasoning": "medium",
     "--review-reasoning": "medium",
   };
+  const seen = new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const key = argv[index];
     if (!key.startsWith("--") || index + 1 >= argv.length) {
       fail(`Invalid argument: ${key}`);
     }
-    if (Object.hasOwn(values, key) && !["--builder-model", "--review-model", "--builder-reasoning", "--review-reasoning"].includes(key)) {
+    if (seen.has(key)) {
       fail(`Duplicate argument: ${key}`);
     }
+    seen.add(key);
     values[key] = argv[index + 1];
     index += 1;
   }
@@ -176,7 +179,7 @@ export function install(argv = process.argv.slice(2)) {
   return { runCommand, controlledCodex, ralphexConfig };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && resolve(process.argv[1]) === THIS_FILE) {
   try {
     const result = install();
     process.stdout.write(`CODEXLOOPER_INSTALL=PASS\nRUN_COMMAND=${result.runCommand}\n`);
