@@ -7,10 +7,7 @@ import {
   recordCodexDiagnosticLine,
   sanitizeCodexDiagnosticLine,
 } from "../src/codex-diagnostics.mjs";
-import {
-  createBuilderOutputSchemaFile,
-  parseBuilderEnvelope,
-} from "../src/builder-envelope.mjs";
+import { parseBuilderEnvelope } from "../src/builder-envelope.mjs";
 import { applyBuilderPatch, superviseBuilderChanges } from "../src/git-supervisor.mjs";
 import { prepareProfileLaunch } from "../src/profiles.mjs";
 import { recordCodexUsageLine } from "../src/telemetry.mjs";
@@ -100,10 +97,11 @@ function structuredPatchGuidance(phase) {
       ? "Use REVIEW_DONE only when no issue exists. If you provide a fix patch, use an empty signal."
       : "Use ALL_TASKS_DONE only when the patch completes every actionable plan item. Otherwise use an empty signal.";
   return `CodexLooper structured patch policy:
-- You are intentionally running in a read-only sandbox. Never attempt apply_patch, file-writing shell commands, or Git-mutating commands.
-- Inspect the repository with read-only tools and reason about the exact changes.
-- Your final response must be the JSON object required by the supplied output schema. Do not wrap it in markdown.
-- The patch field must be empty or a standard textual git unified diff beginning with diff --git lines.
+- You are intentionally running in a read-only sandbox. Use read-only shell and file-inspection tools to inspect the plan and repository.
+- Never attempt apply_patch, file-writing shell commands, or Git-mutating commands.
+- Your final response must be one plain JSON object, not markdown. Required fields are patch and signal. Optional fields are version, summary, and overview. No other fields are allowed.
+- patch must be an empty string or a standard textual git unified diff beginning with diff --git lines.
+- signal must be one of: empty string, <<<RALPHEX:ALL_TASKS_DONE>>>, <<<RALPHEX:REVIEW_DONE>>>, or <<<RALPHEX:TASK_FAILED>>> as allowed for the current phase.
 - Use only same-path file additions, deletions, and modifications. Do not emit renames, copies, binary patches, symlinks, submodules, quoted paths, or paths containing whitespace.
 - Every changed path must be permitted by the active plan. For task work, include the plan checkbox update in the patch.
 - The trusted host validates allowed paths, runs git apply --check, applies the patch, repeats validation commands, and creates the local commit.
@@ -132,13 +130,11 @@ try {
   const internalReview = prompt.includes("<<<RALPHEX:REVIEW_DONE>>>");
   const phase = internalReview ? "review" : "task";
   prompt = `${structuredPatchGuidance(phase)}\n\n${reviewGuidance(internalReview)}${prompt}`;
-  const outputSchema = createBuilderOutputSchemaFile();
 
   const launch = prepareProfileLaunch("builder", {
     json: true,
     multiAgent: internalReview,
     sandbox: "read-only",
-    outputSchema,
   });
 
   const child = spawn(launch.command, launch.args, {
