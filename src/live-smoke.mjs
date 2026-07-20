@@ -65,15 +65,18 @@ function verifyIdentity(requestedModel, response) {
   if (typeof actualModel !== "string" || actualModel.length === 0) {
     fail("CODEXLOOPER_IDENTITY_MISSING", `CloseRouter omitted model identity for ${requestedModel}`);
   }
+
+  const normalizedRequestedProvider = requestedProvider.toLowerCase();
+  const normalizedActualProvider = typeof actualProvider === "string" ? actualProvider.toLowerCase() : actualProvider;
   const exact = actualModel === requestedModel;
-  const separated = actualModel === requestedName && actualProvider === requestedProvider;
+  const separated = actualModel === requestedName && normalizedActualProvider === normalizedRequestedProvider;
   if (!exact && !separated) {
     fail(
       "CODEXLOOPER_IDENTITY_MISMATCH",
       `Requested ${requestedModel}, received provider=${actualProvider ?? "missing"} model=${actualModel}`,
     );
   }
-  if (actualProvider !== undefined && actualProvider !== requestedProvider) {
+  if (actualProvider !== undefined && normalizedActualProvider !== normalizedRequestedProvider) {
     fail(
       "CODEXLOOPER_IDENTITY_MISMATCH",
       `Requested provider ${requestedProvider}, received ${actualProvider}`,
