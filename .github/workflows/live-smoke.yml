@@ -15,7 +15,7 @@ on:
       - .github/live-smoke-trigger
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: codexlooper-live-smoke
@@ -111,3 +111,32 @@ jobs:
           path: .codexlooper/live-smoke-receipt.json
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Publish redacted branch status
+        if: always() && github.event_name == 'push'
+        shell: bash
+        env:
+          LIVE_JOB_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p .codexlooper
+          node --input-type=module <<'NODE'
+          import { existsSync, readFileSync, writeFileSync } from "node:fs";
+          const receiptPath = ".codexlooper/live-smoke-receipt.json";
+          const receipt = existsSync(receiptPath)
+            ? JSON.parse(readFileSync(receiptPath, "utf8"))
+            : null;
+          const status = {
+            schema: "codexlooper.live-smoke-status.v1",
+            created_at: new Date().toISOString(),
+            workflow_status: process.env.LIVE_JOB_STATUS,
+            receipt,
+          };
+          writeFileSync(
+            ".codexlooper/live-smoke-status.json",
+            `${JSON.stringify(status, null, 2)}\n`,
+            { mode: 0o600 },
+          );
+          NODE
+          git add -f .codexlooper/live-smoke-status.json
+          git commit -m "chore: record live smoke status"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
