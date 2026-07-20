@@ -14,7 +14,7 @@ import {
   parseBuilderEnvelope,
 } from "../src/builder-envelope.mjs";
 
-test("parses bounded full and minimal task patch envelopes", () => {
+test("parses bounded full, minimal and fenced task patch envelopes", () => {
   const full = parseBuilderEnvelope(
     JSON.stringify({
       version: 1,
@@ -35,6 +35,12 @@ test("parses bounded full and minimal task patch envelopes", () => {
   );
   assert.equal(minimal.version, 1);
   assert.equal(minimal.summary, "Still working.");
+
+  const fenced = parseBuilderEnvelope(
+    'Result:\n```json\n{"patch":"","signal":"","overview":"Inspected."}\n```',
+    "task",
+  );
+  assert.equal(fenced.summary, "Inspected.");
 });
 
 test("rejects phase-invalid signals and patches attached to terminal failures", () => {
