@@ -26,11 +26,12 @@ test("Terra wrapper rejects a successful Codex stream with no agent message", ()
         CLOSEROUTER_API_KEY: "closerouter_test_secret",
         CODEXLOOPER_REAL_CODEX: codex,
         CODEX_HOME: join(project, ".codexlooper", "codex-home"),
+        CODEXLOOPER_RUN_DIR: join(project, ".codexlooper", "runs", "protocol-test"),
         CODEXLOOPER_ALLOWED_MODELS: "openai/gpt-5.6-terra,openai/gpt-5.6-sol",
       },
     });
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /no translatable agent message/);
+    assert.match(result.stderr, /no structured agent message/);
   } finally {
     rmSync(project, { recursive: true, force: true });
   }
