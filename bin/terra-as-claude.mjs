@@ -3,12 +3,14 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { superviseBuilderChanges } from "../src/git-supervisor.mjs";
 import { prepareProfileLaunch } from "../src/profiles.mjs";
 import { translateCodexEvent } from "../src/claude-stream.mjs";
 import { recordCodexUsageLine } from "../src/telemetry.mjs";
 
 const MAX_PROMPT_BYTES = 2_000_000;
 const MAX_STDERR_BYTES = 16_384;
+const FAILURE_SIGNAL = /<<<RALPHEX:(?:TASK_)?FAILED>>>/;
 
 function fail(message) {
   throw new Error(message);
@@ -40,6 +42,10 @@ function emit(event) {
   process.stdout.write(`${JSON.stringify(event)}\n`);
 }
 
+function emitText(text) {
+  emit({ type: "content_block_delta", delta: { type: "text_delta", text } });
+}
+
 function redactDiagnostic(value) {
   let text = String(value || "");
   const secret = process.env.CLOSEROUTER_API_KEY;
@@ -47,6 +53,18 @@ function redactDiagnostic(value) {
   return text
     .replace(/authorization\s*[:=]\s*bearer\s+[^\s,;]+/gi, "[REDACTED]")
     .trim();
+}
+
+function hostGitGuidance(phase) {
+  return `CodexLooper host Git policy:
+- The workspace-write sandbox intentionally protects .git metadata.
+- Do not run git add, git commit, git branch, git checkout, git merge, git reset, or other Git-mutating commands.
+- Read-only Git commands such as git status, git diff, and git log remain allowed.
+- Make only worktree changes permitted by the active plan, run its validation commands, and update its checkboxes.
+- A trusted host supervisor validates allowed paths, repeats the validation commands, stages exact changed paths, and creates the local commit after this turn.
+- Do not emit <<<RALPHEX:TASK_FAILED>>> merely because Git metadata is read-only.
+- Follow the normal Ralphex signal rules as though the host commit succeeds.
+- Current phase: ${phase}.`;
 }
 
 try {
@@ -58,9 +76,15 @@ try {
   }
 
   const internalReview = prompt.includes("<<<RALPHEX:REVIEW_DONE>>>");
-  if (internalReview) {
-    prompt = `Ralphex review adapter for Codex:\n- Interpret review Task-tool instructions using Codex collaboration tools.\n- Launch requested review agents in parallel.\n- Wait for all agents before collecting findings and applying fixes.\n- Preserve every <<<RALPHEX:...>>> signal exactly.\n\n${prompt}`;
-  }
+  const phase = internalReview ? "review" : "task";
+  const reviewGuidance = internalReview
+    ? `Ralphex review adapter for Codex:
+- Interpret review Task-tool instructions using Codex collaboration tools.
+- Launch requested review agents in parallel.
+- Wait for all agents before collecting findings and applying fixes.
+- Preserve every <<<RALPHEX:...>>> signal exactly.\n\n`
+    : "";
+  prompt = `${hostGitGuidance(phase)}\n\n${reviewGuidance}${prompt}`;
 
   const launch = prepareProfileLaunch("builder", {
     json: true,
@@ -86,9 +110,10 @@ try {
   });
   child.stdin.end(prompt);
 
-  let resultEmitted = false;
+  let resultSeen = false;
   let messageEmitted = false;
   let telemetryError;
+  let agentText = "";
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   const linesClosed = new Promise((resolveClose) => lines.once("close", resolveClose));
   lines.on("line", (line) => {
@@ -99,9 +124,15 @@ try {
     }
     const event = translateCodexEvent(line);
     if (!event) return;
-    if (event.type === "result") resultEmitted = true;
-    if (event.type === "content_block_delta") messageEmitted = true;
-    emit(event);
+    if (event.type === "result") {
+      resultSeen = true;
+      return;
+    }
+    if (event.type === "content_block_delta") {
+      messageEmitted = true;
+      agentText += event.delta?.text || "";
+      emit(event);
+    }
   });
 
   let stderrTail = "";
@@ -129,13 +160,20 @@ try {
     fail(`Codex builder exited with status ${exitCode}${detail ? `: ${detail}` : ""}`);
   }
   if (!messageEmitted) fail("Codex builder returned no translatable agent message");
-  if (!resultEmitted) emit({ type: "result", result: "" });
+  if (!FAILURE_SIGNAL.test(agentText)) {
+    const supervised = superviseBuilderChanges({ phase });
+    if (supervised.committed) {
+      emitText(`CodexLooper host commit ${supervised.commit.slice(0, 12)} created after policy and validation checks.\n`);
+    }
+  }
+  if (!resultSeen) {
+    emitText("CodexLooper compatibility note: Codex emitted no explicit turn.completed event.\n");
+  }
+  emit({ type: "result", result: "" });
 } catch (error) {
   const diagnostic = `CODEXLOOPER_TERRA_BLOCK: ${redactDiagnostic(error.message)}`;
-  emit({
-    type: "content_block_delta",
-    delta: { type: "text_delta", text: `${diagnostic}\n` },
-  });
+  emitText(`${diagnostic}\n<<<RALPHEX:TASK_FAILED>>>\n`);
+  emit({ type: "result", result: "" });
   process.stderr.write(`${diagnostic}\n`);
   process.exitCode = 1;
 }
