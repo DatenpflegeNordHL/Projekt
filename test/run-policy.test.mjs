@@ -32,10 +32,14 @@ test("rejects missing or unsafe plan policy", () => {
     () => parseRunPolicy(planPath, plan("- `src/*.mjs`")),
     (error) => error.code === "CODEXLOOPER_POLICY_PATH_INVALID",
   );
+  assert.throws(
+    () => parseRunPolicy(planPath, plan("- `.codexlooper/**`\n- `src/**`")),
+    (error) => error.code === "CODEXLOOPER_POLICY_PATH_INVALID",
+  );
 });
 
 test("never allows runtime or Git metadata paths", () => {
-  const policy = parseRunPolicy(planPath, plan("- `.codexlooper/**`\n- `src/**`"));
+  const policy = parseRunPolicy(planPath, plan("- `src/**`"));
   assert.equal(pathAllowed(".git/config", policy.allowed_paths), false);
   assert.equal(pathAllowed(".codexlooper/runs/x", policy.allowed_paths), false);
   assert.equal(pathAllowed(".ralphex/config", policy.allowed_paths), false);
