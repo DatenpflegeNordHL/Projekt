@@ -48,7 +48,7 @@ jobs:
         shell: bash
         run: npm install --global @openai/codex@latest >/dev/null 2>&1
 
-      - name: Run custom-provider write case with explicit writable root
+      - name: Run custom-provider write case with activated writable root
         if: steps.trigger.outputs.run == 'true'
         shell: bash
         run: |
@@ -61,6 +61,8 @@ jobs:
 
           cat > "$CODEX_HOME/config.toml" <<EOF
           model_provider = "closerouter"
+          sandbox_mode = "workspace-write"
+          approval_policy = "never"
 
           [model_providers.closerouter]
           name = "CloseRouter"
@@ -129,10 +131,12 @@ jobs:
             .map((event) => String(event.error?.message || event.message || "unknown").slice(-1000));
           const matrixPath = resolve(repo, "matrix.txt");
           const summary = {
-            schema: "codexlooper.provider-matrix.v3",
+            schema: "codexlooper.provider-matrix.v4",
             created_at: new Date().toISOString(),
             provider: "custom",
             sandbox: "workspace-write",
+            config_sandbox_mode: true,
+            approval_policy: "never",
             explicit_writable_root: true,
             exit_code: Number(readFileSync(resolve(root, "exit-code.txt"), "utf8").trim()),
             turn_completed: events.some((event) => event.type === "turn.completed"),
