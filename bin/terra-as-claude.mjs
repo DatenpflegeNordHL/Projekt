@@ -58,7 +58,12 @@ try {
     });
   }
 
+  let stdinError;
+  child.stdin.on("error", (error) => {
+    if (error.code !== "EPIPE") stdinError = error;
+  });
   child.stdin.end(prompt);
+
   let resultEmitted = false;
   let messageEmitted = false;
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
@@ -85,6 +90,7 @@ try {
   });
   await linesClosed;
 
+  if (stdinError) fail(`Codex stdin failed: ${stdinError.message}`);
   if (exitCode !== 0) fail(`Codex builder exited with status ${exitCode}`);
   if (!messageEmitted) fail("Codex builder returned no translatable agent message");
   if (!resultEmitted) emit({ type: "result", result: "" });
