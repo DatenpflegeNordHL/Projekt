@@ -66,7 +66,11 @@ jobs:
         shell: bash
         run: |
           PILOT="$RUNNER_TEMP/codexlooper-wp1-pilot"
+          PILOT_RAW_LOG="$RUNNER_TEMP/codexlooper-wp1-pilot-raw.log"
+          PILOT_FAILURE_LOG="$RUNNER_TEMP/codexlooper-wp1-pilot-failure.log"
           echo "PILOT=$PILOT" >> "$GITHUB_ENV"
+          echo "PILOT_RAW_LOG=$PILOT_RAW_LOG" >> "$GITHUB_ENV"
+          echo "PILOT_FAILURE_LOG=$PILOT_FAILURE_LOG" >> "$GITHUB_ENV"
           mkdir -p "$PILOT/docs/plans" "$PILOT/context" "$PILOT/patterns" "$PILOT/.mex/events"
           cat > "$PILOT/AGENTS.md" <<'EOF'
           # Agent Instructions
@@ -140,15 +144,19 @@ jobs:
         shell: bash
         run: |
           set +e
-          "$PILOT/.codexlooper/bin/codexlooper" docs/plans/wp1-live-pilot.md > "$PILOT/pilot-raw.log" 2>&1
+          "$PILOT/.codexlooper/bin/codexlooper" docs/plans/wp1-live-pilot.md > "$PILOT_RAW_LOG" 2>&1
           status=$?
           set -e
           if [ "$status" -ne 0 ]; then
+            grep -E 'CODEXLOOPER_|BLOCK|failed|failure|error|exited|status' "$PILOT_RAW_LOG" \
+              | tail -n 120 \
+              | sed "s#${CLOSEROUTER_API_KEY}#[REDACTED]#g" \
+              > "$PILOT_FAILURE_LOG" || true
             echo "CODEXLOOPER_WP1_PILOT=BLOCK: runner exited with status $status"
-            tail -c 12000 "$PILOT/pilot-raw.log"
+            cat "$PILOT_FAILURE_LOG"
             exit "$status"
           fi
-          grep -Fq 'CODEXLOOPER_RUN=PASS' "$PILOT/pilot-raw.log"
+          grep -Fq 'CODEXLOOPER_RUN=PASS' "$PILOT_RAW_LOG"
 
       - name: Verify receipt and product result
         if: steps.trigger.outputs.run == 'true'
@@ -200,5 +208,6 @@ jobs:
             ${{ env.PILOT }}/.codexlooper/runs/*/receipt.json
             ${{ env.PILOT }}/pilot-summary.json
             ${{ env.PILOT_TOOL_VERSIONS }}
+            ${{ env.PILOT_FAILURE_LOG }}
           if-no-files-found: warn
           retention-days: 7
