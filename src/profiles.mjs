@@ -63,6 +63,7 @@ export function prepareProfileLaunch(
     outputSchema,
     sourceEnv = process.env,
     projectRoot = process.cwd(),
+    platform = process.platform,
   } = {},
 ) {
   const values = profileValues(profile, sourceEnv);
@@ -94,6 +95,10 @@ export function prepareProfileLaunch(
   if (json) args.push("--json");
   if (outputSchema) args.push("--output-schema", outputSchema);
   args.push("--ephemeral", "--sandbox", sandbox);
+  const legacyLandlock = sandbox === "workspace-write" && platform === "linux";
+  if (legacyLandlock) {
+    args.push("-c", "use_legacy_landlock=true");
+  }
   if (multiAgent) {
     args.push("-c", "features.multi_agent=true");
   }
@@ -115,6 +120,7 @@ export function prepareProfileLaunch(
       model: values.model,
       reasoning: values.reasoning,
       sandbox,
+      sandbox_backend: legacyLandlock ? "legacy_landlock" : "platform_default",
       json,
       multi_agent: multiAgent,
       output_schema: outputSchema || null,
