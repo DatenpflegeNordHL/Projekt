@@ -112,6 +112,11 @@ try {
   if (!messageEmitted) fail("Codex builder returned no translatable agent message");
   if (!resultEmitted) emit({ type: "result", result: "" });
 } catch (error) {
-  process.stderr.write(`CODEXLOOPER_TERRA_BLOCK: ${redactDiagnostic(error.message)}\n`);
+  const diagnostic = `CODEXLOOPER_TERRA_BLOCK: ${redactDiagnostic(error.message)}`;
+  emit({
+    type: "content_block_delta",
+    delta: { type: "text_delta", text: `${diagnostic}\n` },
+  });
+  process.stderr.write(`${diagnostic}\n`);
   process.exitCode = 1;
 }
