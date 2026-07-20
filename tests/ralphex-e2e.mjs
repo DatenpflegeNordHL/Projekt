@@ -50,8 +50,7 @@ try {
   const fakeCodexSource = join(tools, "fake-codex.mjs");
   writeFileSync(
     fakeCodexSource,
-    `import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+    `import { readFileSync } from "node:fs";
 
 if (process.argv[2] === "--version") { console.log("codex-cli 0.130.0"); process.exit(0); }
 if (!process.env.CLOSEROUTER_API_KEY) process.exit(31);
@@ -67,13 +66,26 @@ if (modelArg.includes("gpt-5.6-sol")) {
   if (sandbox !== "read-only") process.exit(35);
   text = "NO ISSUES FOUND";
 } else if (prompt.includes("Read the plan file at")) {
-  if (sandbox !== "workspace-write" || args.includes("--output-schema")) process.exit(36);
-  const planPath = join(process.cwd(), "docs", "plans", "fixture.md");
-  writeFileSync(join(process.cwd(), "result.txt"), "fixture-pass\\n");
-  writeFileSync(planPath, readFileSync(planPath, "utf8").replace("- [ ] Create", "- [x] Create"));
-  text = JSON.stringify({ patch: "", signal: "<<<RALPHEX:ALL_TASKS_DONE>>>", overview: "Completed fixture inside the isolated snapshot." });
+  if (sandbox !== "read-only" || args.includes("--output-schema")) process.exit(36);
+  const patch = [
+    "diff --git a/result.txt b/result.txt",
+    "new file mode 100644",
+    "--- /dev/null",
+    "+++ b/result.txt",
+    "@@ -0,0 +1 @@",
+    "+fixture-pass",
+    "diff --git a/docs/plans/fixture.md b/docs/plans/fixture.md",
+    "--- a/docs/plans/fixture.md",
+    "+++ b/docs/plans/fixture.md",
+    "@@ -10,2 +10,2 @@",
+    " ### Task 1: Produce result",
+    "-- [ ] Create result.txt containing fixture-pass",
+    "+- [x] Create result.txt containing fixture-pass",
+    "",
+  ].join("\\n");
+  text = JSON.stringify({ patch, signal: "<<<RALPHEX:ALL_TASKS_DONE>>>", overview: "Returned a host-applied patch without writing the snapshot." });
 } else {
-  if (sandbox !== "workspace-write") process.exit(37);
+  if (sandbox !== "read-only") process.exit(37);
   text = JSON.stringify({ patch: "", signal: "<<<RALPHEX:REVIEW_DONE>>>", overview: "No review findings." });
 }
 console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } }));
