@@ -1,7 +1,8 @@
+import { isAbsolute } from "node:path";
 import { buildChildEnv, resolveRealCodex } from "./launcher.mjs";
 
 const ALLOWED_REASONING = new Set(["low", "medium", "high"]);
-const ALLOWED_SANDBOXES = new Set(["read-only", "workspace-write"]);
+const ALLOWED_SANDBOXES = new Set(["read-only"]);
 
 function fail(code, message) {
   const error = new Error(message);
@@ -31,7 +32,8 @@ export function prepareProfileLaunch(
   {
     json = false,
     multiAgent = false,
-    sandbox = profile === "reviewer" ? "read-only" : "workspace-write",
+    sandbox = "read-only",
+    outputSchema,
     sourceEnv = process.env,
     projectRoot = process.cwd(),
   } = {},
@@ -42,6 +44,12 @@ export function prepareProfileLaunch(
   }
   if (!ALLOWED_SANDBOXES.has(sandbox)) {
     fail("CODEXLOOPER_SANDBOX_REJECTED", `Sandbox is not allowed: ${sandbox}`);
+  }
+  if (
+    outputSchema !== undefined &&
+    (typeof outputSchema !== "string" || !isAbsolute(outputSchema) || outputSchema.includes("\0"))
+  ) {
+    fail("CODEXLOOPER_OUTPUT_SCHEMA_REJECTED", "Output schema must be an absolute path");
   }
 
   const allowedModels = new Set(
@@ -56,6 +64,7 @@ export function prepareProfileLaunch(
 
   const args = ["exec"];
   if (json) args.push("--json");
+  if (outputSchema) args.push("--output-schema", outputSchema);
   args.push("--ephemeral", "--sandbox", sandbox);
   if (multiAgent) {
     args.push("-c", "features.multi_agent=true");
@@ -80,6 +89,7 @@ export function prepareProfileLaunch(
       sandbox,
       json,
       multi_agent: multiAgent,
+      output_schema: outputSchema || null,
     },
   };
 }
