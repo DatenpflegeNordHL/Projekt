@@ -7,16 +7,18 @@ import {
   recordCodexDiagnosticLine,
   sanitizeCodexDiagnosticLine,
 } from "../src/codex-diagnostics.mjs";
-import { superviseBuilderChanges } from "../src/git-supervisor.mjs";
+import {
+  createBuilderOutputSchemaFile,
+  parseBuilderEnvelope,
+} from "../src/builder-envelope.mjs";
+import { applyBuilderPatch, superviseBuilderChanges } from "../src/git-supervisor.mjs";
 import { prepareProfileLaunch } from "../src/profiles.mjs";
-import { translateCodexEvent } from "../src/claude-stream.mjs";
 import { recordCodexUsageLine } from "../src/telemetry.mjs";
 
 const MAX_PROMPT_BYTES = 2_000_000;
 const MAX_STDERR_BYTES = 16_384;
 const MAX_TOOL_DIAGNOSTICS = 20;
 const MAX_TOOL_DIAGNOSTIC_TEXT = 8_000;
-const FAILURE_SIGNAL = /<<<RALPHEX:(?:TASK_)?FAILED>>>/;
 
 function fail(message) {
   throw new Error(message);
@@ -61,18 +63,6 @@ function redactDiagnostic(value) {
     .trim();
 }
 
-function hostGitGuidance(phase) {
-  return `CodexLooper host Git policy:
-- The workspace-write sandbox intentionally protects .git metadata.
-- Do not run git add, git commit, git branch, git checkout, git merge, git reset, or other Git-mutating commands.
-- Read-only Git commands such as git status, git diff, and git log remain allowed.
-- Make only worktree changes permitted by the active plan, run its validation commands, and update its checkboxes.
-- A trusted host supervisor validates allowed paths, repeats the validation commands, stages exact changed paths, and creates the local commit after this turn.
-- Do not emit <<<RALPHEX:TASK_FAILED>>> merely because Git metadata is read-only.
-- Follow the normal Ralphex signal rules as though the host commit succeeds.
-- Current phase: ${phase}.`;
-}
-
 function boundedToolDiagnostics(events) {
   const relevant = events.filter((event) => {
     if (event.type === "turn.failed" || event.type === "error") return true;
@@ -88,6 +78,49 @@ function boundedToolDiagnostics(events) {
   return JSON.stringify(selected).slice(-MAX_TOOL_DIAGNOSTIC_TEXT);
 }
 
+function parseLegacySignal(text, phase) {
+  const value = String(text || "").trim();
+  const allowed =
+    phase === "review"
+      ? new Set(["<<<RALPHEX:REVIEW_DONE>>>", "<<<RALPHEX:TASK_FAILED>>>"])
+      : new Set(["<<<RALPHEX:ALL_TASKS_DONE>>>", "<<<RALPHEX:TASK_FAILED>>>"]);
+  if (!allowed.has(value)) return null;
+  return {
+    version: 0,
+    patch: "",
+    signal: value,
+    summary: "",
+    legacy_worktree: true,
+  };
+}
+
+function structuredPatchGuidance(phase) {
+  const phaseSignal =
+    phase === "review"
+      ? "Use REVIEW_DONE only when no issue exists. If you provide a fix patch, use an empty signal."
+      : "Use ALL_TASKS_DONE only when the patch completes every actionable plan item. Otherwise use an empty signal.";
+  return `CodexLooper structured patch policy:
+- You are intentionally running in a read-only sandbox. Never attempt apply_patch, file-writing shell commands, or Git-mutating commands.
+- Inspect the repository with read-only tools and reason about the exact changes.
+- Your final response must be the JSON object required by the supplied output schema. Do not wrap it in markdown.
+- The patch field must be empty or a standard textual git unified diff beginning with diff --git lines.
+- Use only same-path file additions, deletions, and modifications. Do not emit renames, copies, binary patches, symlinks, submodules, quoted paths, or paths containing whitespace.
+- Every changed path must be permitted by the active plan. For task work, include the plan checkbox update in the patch.
+- The trusted host validates allowed paths, runs git apply --check, applies the patch, repeats validation commands, and creates the local commit.
+- ${phaseSignal}
+- Use TASK_FAILED only when the task cannot be completed safely; TASK_FAILED requires an empty patch.
+- Current phase: ${phase}.`;
+}
+
+function reviewGuidance(internalReview) {
+  if (!internalReview) return "";
+  return `Ralphex review adapter for Codex:
+- Interpret review Task-tool instructions using Codex collaboration tools.
+- Launch requested review agents in parallel and keep them read-only.
+- Wait for all agents before collecting findings.
+- Return one final structured patch envelope from the primary agent only.\n\n`;
+}
+
 try {
   validateArgs(process.argv.slice(2));
   let prompt = readFileSync(0, "utf8");
@@ -98,19 +131,14 @@ try {
 
   const internalReview = prompt.includes("<<<RALPHEX:REVIEW_DONE>>>");
   const phase = internalReview ? "review" : "task";
-  const reviewGuidance = internalReview
-    ? `Ralphex review adapter for Codex:
-- Interpret review Task-tool instructions using Codex collaboration tools.
-- Launch requested review agents in parallel.
-- Wait for all agents before collecting findings and applying fixes.
-- Preserve every <<<RALPHEX:...>>> signal exactly.\n\n`
-    : "";
-  prompt = `${hostGitGuidance(phase)}\n\n${reviewGuidance}${prompt}`;
+  prompt = `${structuredPatchGuidance(phase)}\n\n${reviewGuidance(internalReview)}${prompt}`;
+  const outputSchema = createBuilderOutputSchemaFile();
 
   const launch = prepareProfileLaunch("builder", {
     json: true,
     multiAgent: internalReview,
-    sandbox: "workspace-write",
+    sandbox: "read-only",
+    outputSchema,
   });
 
   const child = spawn(launch.command, launch.args, {
@@ -131,10 +159,8 @@ try {
   });
   child.stdin.end(prompt);
 
-  let resultSeen = false;
-  let messageEmitted = false;
   let telemetryError;
-  let agentText = "";
+  const agentMessages = [];
   const toolDiagnostics = [];
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   const linesClosed = new Promise((resolveClose) => lines.once("close", resolveClose));
@@ -154,16 +180,15 @@ try {
     } catch (error) {
       telemetryError ||= error;
     }
-    const event = translateCodexEvent(line);
-    if (!event) return;
-    if (event.type === "result") {
-      resultSeen = true;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
       return;
     }
-    if (event.type === "content_block_delta") {
-      messageEmitted = true;
-      agentText += event.delta?.text || "";
-      emit(event);
+    if (event?.type === "item.completed" && event?.item?.type === "agent_message") {
+      const text = typeof event.item.text === "string" ? event.item.text : "";
+      if (text) agentMessages.push(text);
     }
   });
 
@@ -189,25 +214,31 @@ try {
   if (telemetryError) fail(`Codex usage telemetry failed: ${telemetryError.message}`);
   if (exitCode !== 0) {
     const detail = redactDiagnostic(stderrTail);
-    const toolDetail = toolDiagnostics.length > 0 ? boundedToolDiagnostics(toolDiagnostics) : "";
-    fail(
-      `Codex builder exited with status ${exitCode}${detail ? `: ${detail}` : ""}${toolDetail ? `; diagnostics=${toolDetail}` : ""}`,
+    const events = toolDiagnostics.length > 0 ? `; events=${boundedToolDiagnostics(toolDiagnostics)}` : "";
+    fail(`Codex builder exited with status ${exitCode}${detail ? `: ${detail}` : ""}${events}`);
+  }
+  if (agentMessages.length === 0) fail("Codex builder returned no structured agent message");
+
+  let envelope;
+  try {
+    envelope = parseBuilderEnvelope(agentMessages.at(-1), phase);
+  } catch (error) {
+    envelope = parseLegacySignal(agentMessages.at(-1), phase);
+    if (!envelope) throw error;
+  }
+  let supervised = { committed: false };
+  if (envelope.signal !== "<<<RALPHEX:TASK_FAILED>>>") {
+    supervised = envelope.legacy_worktree
+      ? superviseBuilderChanges({ phase })
+      : applyBuilderPatch({ patch: envelope.patch, phase });
+  }
+  if (envelope.summary) emitText(`${envelope.summary}\n`);
+  if (supervised.committed) {
+    emitText(
+      `CodexLooper host commit ${supervised.commit.slice(0, 12)} created after patch, policy, and validation checks.\n`,
     );
   }
-  if (!messageEmitted) fail("Codex builder returned no translatable agent message");
-  if (FAILURE_SIGNAL.test(agentText)) {
-    if (toolDiagnostics.length > 0) {
-      emitText(`CodexLooper tool diagnostics: ${boundedToolDiagnostics(toolDiagnostics)}\n`);
-    }
-  } else {
-    const supervised = superviseBuilderChanges({ phase });
-    if (supervised.committed) {
-      emitText(`CodexLooper host commit ${supervised.commit.slice(0, 12)} created after policy and validation checks.\n`);
-    }
-  }
-  if (!resultSeen) {
-    emitText("CodexLooper compatibility note: Codex emitted no explicit turn.completed event.\n");
-  }
+  if (envelope.signal) emitText(`${envelope.signal}\n`);
   emit({ type: "result", result: "" });
 } catch (error) {
   const diagnostic = `CODEXLOOPER_TERRA_BLOCK: ${redactDiagnostic(error.message)}`;
