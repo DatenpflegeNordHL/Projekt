@@ -105,6 +105,13 @@ function iniValue(value) {
   return value;
 }
 
+function tomlString(value) {
+  if (value.includes("\0") || value.includes("\n") || value.includes("\r")) {
+    fail("Unsafe TOML string value");
+  }
+  return JSON.stringify(value);
+}
+
 function writeAtomic(path, content, mode = 0o600) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.tmp-${process.pid}`;
@@ -202,7 +209,7 @@ export function install(argv = process.argv.slice(2)) {
   const runCommand = resolve(binDir, "codexlooper");
   const ralphexConfig = resolve(project, ".ralphex", "config");
 
-  const codexConfig = `model_provider = "closerouter"\n\n[model_providers.closerouter]\nname = "CloseRouter"\nbase_url = "https://api.closerouter.dev/v1"\nenv_key = "CLOSEROUTER_API_KEY"\nwire_api = "responses"\nrequest_max_retries = 2\nstream_max_retries = 2\nstream_idle_timeout_ms = 120000\nrequires_openai_auth = false\nsupports_websockets = false\n`;
+  const codexConfig = `model_provider = "closerouter"\n\n[model_providers.closerouter]\nname = "CloseRouter"\nbase_url = "https://api.closerouter.dev/v1"\nenv_key = "CLOSEROUTER_API_KEY"\nwire_api = "responses"\nrequest_max_retries = 2\nstream_max_retries = 2\nstream_idle_timeout_ms = 120000\nrequires_openai_auth = false\nsupports_websockets = false\n\n[sandbox_workspace_write]\nwritable_roots = [${tomlString(project)}]\n`;
   writeAtomic(resolve(codexHome, "config.toml"), codexConfig, 0o600);
 
   const allowedModels = `${builderModel},${reviewModel}`;
@@ -250,6 +257,7 @@ export function install(argv = process.argv.slice(2)) {
     sol_reviewer: solReviewer,
     run_command: runCommand,
     codex_home: codexHome,
+    writable_root: project,
     builder: { model: builderModel, reasoning: builderReasoning, role: "implementation_and_fixes" },
     reviewer: { model: reviewModel, reasoning: reviewReasoning, role: "read_only_findings" },
   };
