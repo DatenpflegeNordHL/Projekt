@@ -11,9 +11,10 @@
 - Node.js 20 and 22 CI passes on the WP0 baseline.
 - The repository secret `CLOSEROUTER_API_KEY` is configured.
 
-## WP1 in progress
+## Core CLI status
 
-- One tracked plan is accepted per run.
+- WP1 through WP5 are complete; see `docs/ROADMAP.md` for the accepted evidence.
+- One tracked direct Markdown plan under `docs/plans/` is accepted per run. Nested plans are rejected because Ralphex archives completed plans by filename in `docs/plans/completed/`.
 - The generated `codexlooper` command performs preflight and starts Ralphex.
 - Codex `turn.completed` events are recorded as secret-free usage telemetry.
 - Terra and Sol usage is separated and priced from the verified CloseRouter snapshot.
@@ -24,6 +25,6 @@
 
 - Rename the GitHub repository from `Projekt` to `codexlooper`.
 
-## Next roadmap gate
+## Next use gate
 
-Pass Node.js 20/22 CI and the real Ralphex v1.6.0 WP1 fixture, then execute one authorized real roadmap task through the new receipt runner.
+For each target project, run the existing bootstrap and then execute an explicitly authorized, bounded roadmap plan through the receipt runner.
