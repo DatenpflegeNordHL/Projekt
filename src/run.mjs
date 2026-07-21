@@ -118,6 +118,9 @@ function validatePlan(projectRoot, supplied) {
   if (!relToPlans || relToPlans.startsWith("..") || isAbsolute(relToPlans)) {
     fail("CODEXLOOPER_PLAN_INVALID", "Plan must be a file inside docs/plans");
   }
+  if (relToPlans.includes(sep)) {
+    fail("CODEXLOOPER_PLAN_INVALID", "Plan must be a direct file inside docs/plans");
+  }
   if (relToPlans.split(sep).includes("completed")) {
     fail("CODEXLOOPER_PLAN_INVALID", "Completed plans cannot be executed again");
   }
