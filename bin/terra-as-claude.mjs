@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import {
@@ -275,11 +275,32 @@ try {
   let effectivePatch = "";
   if (envelope.signal !== "<<<RALPHEX:TASK_FAILED>>>") {
     effectivePatch = envelope.patch;
+    const runDirectory = process.env.CODEXLOOPER_RUN_DIR;
+    const patchArtifact =
+      typeof runDirectory === "string" && runDirectory
+        ? resolve(
+            runDirectory,
+            `builder-patch-${Date.now()}-${process.pid}.diff`,
+          )
+        : null;
+
+    if (patchArtifact && effectivePatch.trim()) {
+      writeFileSync(patchArtifact, effectivePatch, {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+      });
+    }
+
     supervised = effectivePatch.trim()
       ? applyBuilderPatch({ patch: effectivePatch, phase })
       : envelope.legacy_worktree
         ? superviseBuilderChanges({ phase })
         : { committed: false };
+
+    if (patchArtifact && supervised.committed) {
+      rmSync(patchArtifact, { force: true });
+    }
   }
   const signal = hostSignal({
     phase,
