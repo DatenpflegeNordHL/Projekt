@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readdirSync,
@@ -294,6 +295,33 @@ test("generated runner creates commit, completed plan and cost receipt", () => {
     assert.ok(receipt.usage.totals.estimated_cost_usd > 0);
     assert.deepEqual(receipt.policy.validation_commands, ["test -f docs/plans/fixture.md"]);
     assert.doesNotMatch(JSON.stringify(receipt), /closerouter_test_secret|OPENAI_API_KEY|GITHUB_TOKEN/);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("generated runner rejects nested plans before Ralphex can collide completion filenames", () => {
+  const fixture = createFixture();
+  try {
+    const result = installFixture(fixture);
+    const nestedDirectory = join(fixture.project, "docs", "plans", "feature");
+    mkdirSync(nestedDirectory);
+    writeFileSync(
+      join(nestedDirectory, "fixture.md"),
+      "# Nested Plan\n\n## Allowed paths\n- `result.txt`\n\n## Validation Commands\n- `test -f result.txt`\n\n### Task 1: Result\n- [ ] Create result.txt\n",
+    );
+    git(fixture.project, ["add", "docs/plans/feature/fixture.md"]);
+    git(fixture.project, ["commit", "-m", "test: add nested plan"]);
+
+    const run = spawnSync(result.runCommand, ["docs/plans/feature/fixture.md"], {
+      cwd: fixture.project,
+      encoding: "utf8",
+      env: modelEnv(),
+    });
+
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /CODEXLOOPER_PLAN_INVALID: Plan must be a direct file inside docs\/plans/);
+    assert.equal(existsSync(join(fixture.project, ".codexlooper", "runs")), false);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
