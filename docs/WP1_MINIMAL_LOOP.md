@@ -13,7 +13,7 @@ export CLOSEROUTER_API_KEY='...'
 .codexlooper/bin/codexlooper docs/plans/<plan>.md
 ```
 
-Exactly one tracked Markdown plan inside `docs/plans/` is accepted. Completed plans, symlinks, dirty worktrees and missing credentials are rejected.
+Exactly one tracked Markdown plan directly inside `docs/plans/` is accepted. Nested plans are rejected because Ralphex archives a completed plan by filename under `docs/plans/completed/`. Completed plans, symlinks, dirty worktrees and missing credentials are rejected.
 
 ## Required completion gates
 
@@ -46,4 +46,4 @@ The WP1 estimate uses the verified CloseRouter catalog snapshot from 2026-07-20:
 | `openai/gpt-5.6-terra` | $0.09 | $0.009 | $0.36 |
 | `openai/gpt-5.6-sol` | $0.0945 | $0.00945 | $0.378 |
 
-Dynamic catalog refresh and hard run budgets remain WP4 work.
+The pricing snapshot is intentionally pinned for reproducible receipts. Dynamic catalog refresh and hard run budgets remain future optional controls.
