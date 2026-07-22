@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -65,15 +66,16 @@ test("installer pins the exact project as Codex workspace writable root", () => 
       ralphex,
     ]);
 
+    const canonicalProject = realpathSync(project);
     const config = readFileSync(join(project, ".codexlooper", "codex-home", "config.toml"), "utf8");
     assert.match(config, /\[sandbox_workspace_write\]/);
     assert.match(config, /writable_roots = \[/);
-    assert.ok(config.includes(JSON.stringify(project)));
+    assert.ok(config.includes(JSON.stringify(canonicalProject)));
 
     const state = JSON.parse(
       readFileSync(join(project, ".codexlooper", "install-state.json"), "utf8"),
     );
-    assert.equal(state.writable_root, project);
+    assert.equal(state.writable_root, canonicalProject);
     assert.equal(state.runtime.id, result.runtimeId);
     assert.equal(state.budgets.max_builder_calls, 12);
     assert.deepEqual(state.branch_policy, {
@@ -85,7 +87,7 @@ test("installer pins the exact project as Codex workspace writable root", () => 
     });
     assert.deepEqual(result.branchPolicy, state.branch_policy);
     assert.ok(existsSync(state.runtime.manifest));
-    assert.equal(result.runCommand, join(project, ".codexlooper", "bin", "codexlooper"));
+    assert.equal(result.runCommand, join(canonicalProject, ".codexlooper", "bin", "codexlooper"));
   } finally {
     removeTree(root);
   }
