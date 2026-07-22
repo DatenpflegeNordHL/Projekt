@@ -138,16 +138,20 @@ function signalProcessGroup(child, signal) {
   }
 }
 
-async function superviseWorker() {
-  const timeoutMs = positiveInteger(
-    process.env.CODEXLOOPER_MAX_RUN_DURATION_MS,
-    "CODEXLOOPER_MAX_RUN_DURATION_MS",
-  );
-  const env = { ...process.env, [WORKER_FLAG]: "1" };
-  const child = spawn(process.execPath, [THIS_FILE, ...process.argv.slice(2)], {
-    cwd: process.cwd(),
+export async function spawnSupervised(command, args, {
+  cwd = process.cwd(),
+  env = process.env,
+  stdio = "inherit",
+  timeoutMs,
+  killGraceMs = 2_000,
+  label = "Supervised process",
+} = {}) {
+  const timeout = positiveInteger(timeoutMs, "Process timeout");
+  const grace = positiveInteger(killGraceMs, "Kill grace period");
+  const child = spawn(command, args, {
+    cwd,
     env,
-    stdio: "inherit",
+    stdio,
     detached: true,
   });
   let timedOut = false;
@@ -162,23 +166,23 @@ async function superviseWorker() {
   const timeoutTimer = setTimeout(() => {
     timedOut = true;
     forward("SIGTERM");
-    hardKillTimer = setTimeout(() => forward("SIGKILL"), 2_000);
+    hardKillTimer = setTimeout(() => forward("SIGKILL"), grace);
     hardKillTimer.unref?.();
-  }, timeoutMs);
+  }, timeout);
   timeoutTimer.unref?.();
   try {
-    const exitCode = await new Promise((resolveExit, rejectExit) => {
+    return await new Promise((resolveExit, rejectExit) => {
       child.once("error", rejectExit);
       child.once("exit", (code, signal) => {
         if (timedOut) {
-          const error = new Error("CodexLooper run worker exceeded its duration budget");
+          const error = new Error(`${label} exceeded its duration budget`);
           error.code = "CODEXLOOPER_BUDGET_DURATION_EXCEEDED";
           error.signal = signal;
           rejectExit(error);
           return;
         }
         if (signal) {
-          const error = new Error(`CodexLooper run worker terminated by ${signal}`);
+          const error = new Error(`${label} terminated by ${signal}`);
           error.code = "CODEXLOOPER_CHILD_SIGNALLED";
           rejectExit(error);
           return;
@@ -186,12 +190,28 @@ async function superviseWorker() {
         resolveExit(code ?? 1);
       });
     });
-    process.exitCode = exitCode;
   } finally {
     clearTimeout(timeoutTimer);
     if (hardKillTimer) clearTimeout(hardKillTimer);
     for (const [signal, handler] of signalHandlers) process.off(signal, handler);
   }
+}
+
+async function superviseWorker() {
+  const timeoutMs = positiveInteger(
+    process.env.CODEXLOOPER_MAX_RUN_DURATION_MS,
+    "CODEXLOOPER_MAX_RUN_DURATION_MS",
+  );
+  const env = { ...process.env, [WORKER_FLAG]: "1" };
+  const exitCode = await spawnSupervised(process.execPath, [THIS_FILE, ...process.argv.slice(2)], {
+    cwd: process.cwd(),
+    env,
+    stdio: "inherit",
+    timeoutMs,
+    killGraceMs: 2_000,
+    label: "CodexLooper run worker",
+  });
+  process.exitCode = exitCode;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === THIS_FILE) {
