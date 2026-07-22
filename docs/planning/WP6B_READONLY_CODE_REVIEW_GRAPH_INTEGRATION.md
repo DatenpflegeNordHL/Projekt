@@ -1,16 +1,25 @@
 # WP6B Read-only Code Review Graph Integration
 
-Status: **READY FOR FINAL PLAN REVIEW — NOT EXECUTABLE**
+Status: **BLOCKED ON CRG ENVIRONMENT SEAL AND SANDBOX PROOF**
 
 WP6A Loop Trust Hardening and the authorised macOS Runtime A proof are complete.
-The original Code Review Graph v2.3.6 executable is installed and its local
+The original Code Review Graph v2.3.6 package is installed and its local package
 identity is recorded in:
 
 `docs/architecture/WP6B_CRG_LOCAL_INSTALL_PROOF.md`
 
+Independent plan review is recorded in:
+
+`docs/architecture/WP6B_INDEPENDENT_PLAN_REVIEW.md`
+
 This specification intentionally remains outside `docs/plans/`. It must not be
-promoted or executed until explicit WP6B execution authorisation is given and a
-separate independent plan review reports no blocking finding.
+promoted or executed until:
+
+1. the complete CRG environment is content-manifested and sealed read-only;
+2. the canonical Python interpreter identity is recorded;
+3. the macOS sandbox prerequisite is proven;
+4. this exact plan receives a final independent review with no blocking finding;
+5. explicit WP6B execution authorisation is given.
 
 Controlling contract:
 `docs/architecture/CODEXLOOPER_LOOP_TRUST_INVARIANTS.md`
@@ -31,11 +40,22 @@ after Runtime B is installed from the reviewed WP6B candidate.
 - Runtime A local proof on macOS arm64: PASS.
 - Local regression: 68 passed, 0 failed.
 - Original CRG package installed from exact release commit: PASS.
-- CRG version output: `code-review-graph 2.3.6`.
-- CRG command is a regular, executable, non-symlink file: PASS.
+- CRG package and CLI version: `2.3.6`.
+- Installed console command regular, executable and non-symlink: PASS.
 - Model calls during installation proof: `0`.
 - CRG graph builds during installation proof: `0`.
 - `code-review-graph install` used: `false`.
+
+## Open prerequisites
+
+- full isolated-environment SHA-256 manifest;
+- canonical Python interpreter path, version and SHA-256;
+- read-only CRG environment seal;
+- post-seal exact version proof;
+- verified macOS sandbox command and profile;
+- denied network proof;
+- denied write-outside-private-run proof;
+- final independent review of this exact planning file.
 
 ## Pinned upstream identity
 
@@ -43,30 +63,74 @@ after Runtime B is installed from the reviewed WP6B candidate.
 - version: `2.3.6`
 - release commit: `935695f800f2b02e71aae6d463f3df65f0c6493e`
 - local environment: `$HOME/.local/share/codexlooper/crg-2.3.6`
-- local command: `$HOME/.local/share/codexlooper/crg-2.3.6/bin/code-review-graph`
-- command SHA-256: `1c0e3e3ad5383069926583667f7c536e8111deddc793189e15d31f34e1d6d604`
+- local console command: `$HOME/.local/share/codexlooper/crg-2.3.6/bin/code-review-graph`
+- console command SHA-256: `1c0e3e3ad5383069926583667f7c536e8111deddc793189e15d31f34e1d6d604`
 - dependency freeze SHA-256: `08f4a3b2a2265df20646078706006232f7d5137160949e0c5e7a4223faa950af`
-- Python used for the local installation proof: `3.14.6`
+- Python version used for installation: `3.14.6`
 
-The adapter must re-check the command path, canonical path, mode, executable
-identity, SHA-256 and exact version output during bootstrap and preflight. The
-proof values are evidence, not permission to skip runtime verification.
+The console-command hash alone is not a sufficient runtime identity. Bootstrap
+and preflight must verify the complete sealed environment manifest, canonical
+interpreter identity, command identity and exact version output.
 
-## Upstream source evidence
+## Confirmed upstream behavior
 
 The adapter contract is grounded in original Code Review Graph v2.3.6 source:
 
-- `code_review_graph/__init__.py` declares `__version__ = "2.3.6"`;
-- `code_review_graph/cli.py` prints `code-review-graph <version>` for `--version`;
+- the project script resolves to `code_review_graph.cli:main`;
 - `build` accepts `--repo`, `--skip-flows` and `--data-dir`;
 - `detect-changes` accepts `--base` and `--repo`, does not accept `--data-dir`,
-  and prints full JSON when changes exist and `--brief` is absent;
+  and is described as analysis-only against an existing graph;
 - `detect-changes` prints the exact text `No changes detected.` when no changed
   files exist;
-- `CRG_REPO_ROOT` controls repository resolution;
-- `CRG_DATA_DIR` controls graph storage and contains `graph.db`.
+- `CRG_DATA_DIR` controls graph storage when no private registry entry overrides it;
+- `get_data_dir()` creates its selected directory and an inner `.gitignore`;
+- the parser defaults to a process executor on macOS and Linux and may select up
+  to eight workers;
+- `CRG_PARSE_EXECUTOR=thread` and `CRG_PARSE_WORKERS=1` provide the required
+  bounded single-worker mode;
+- the upstream legacy migration path can rename `.code-review-graph.db` and
+  delete legacy WAL, SHM or journal side files at repository root.
 
 Do not copy CRG implementation source into CodexLooper.
+
+## Complete environment identity and seal
+
+Before promotion, create a deterministic manifest outside the CRG environment
+covering every directory, regular file and symlink in the isolated environment.
+For regular files record:
+
+- canonical relative path;
+- file type;
+- exact mode;
+- byte size;
+- SHA-256.
+
+For symlinks record:
+
+- canonical relative path;
+- literal link target;
+- canonical resolved target;
+- whether the target is inside or outside the environment.
+
+Separately record the canonical Python interpreter path, version, mode, size and
+SHA-256. Only expected Python launcher symlinks may resolve outside the environment.
+Unknown external symlink targets are rejected.
+
+After manifest creation:
+
+- make non-executable regular files read-only;
+- make executable regular files read-only and executable;
+- make directories read-only and searchable;
+- verify that no file can be added, changed or removed by the unprivileged run;
+- verify the complete manifest before every CRG invocation;
+- reject added, missing, changed or mode-changed entries;
+- never let candidate code update the manifest or environment.
+
+Required Python environment controls:
+
+- `PYTHONNOUSERSITE=1`;
+- `PYTHONSAFEPATH=1`;
+- `PYTHONDONTWRITEBYTECODE=1`.
 
 ## Pinned CLI contract
 
@@ -83,25 +147,70 @@ Required trimmed version output:
 `code-review-graph 2.3.6`
 
 Never invoke `install`, `init`, `serve`, `mcp`, `watch`, `daemon`, `embed`,
-`refactor`, `uninstall`, `register`, `wiki`, `visualize` or any shell command
-constructed from CRG output.
+`update`, `postprocess`, `refactor`, `uninstall`, `register`, `unregister`,
+`repos`, `wiki`, `visualize`, `eval` or any shell command constructed from CRG
+output.
 
 Use argument arrays with `shell: false`.
 
-## Isolated environment
+## Isolated child environment
 
-CRG receives only a minimal non-secret environment required by its pinned Python
-runtime and `/usr/bin/git`:
+CRG receives only a minimal non-secret environment:
 
 - `HOME=<CODEXLOOPER_RUN_DIR>/crg-home`;
 - `CRG_DATA_DIR=<CODEXLOOPER_RUN_DIR>/crg-data`;
 - `CRG_REPO_ROOT=<absolute-project-root>`;
+- `CRG_PARSE_EXECUTOR=thread`;
+- `CRG_PARSE_WORKERS=1`;
+- `PYTHONNOUSERSITE=1`;
+- `PYTHONSAFEPATH=1`;
+- `PYTHONDONTWRITEBYTECODE=1`;
 - `DO_NOT_TRACK=1`;
 - `NO_COLOR=1`;
-- bounded locale, temporary-directory, certificate and PATH variables as needed.
+- `PATH=/usr/bin:/bin` unless an exact reviewed system path is required;
+- bounded locale, temporary-directory and certificate variables only when needed.
 
-The CloseRouter credential, Codex configuration and unrelated user environment
-must not be forwarded.
+Reject inherited conflicting `CRG_*` and `PYTHON*` variables. The CloseRouter
+credential, Codex configuration and unrelated user environment must not be
+forwarded.
+
+## macOS operating-system sandbox
+
+The authorised macOS path must execute CRG through a verified OS sandbox profile.
+The profile must:
+
+- deny network access;
+- deny writes outside the private run and private temporary directories;
+- allow read-only access to the project checkout;
+- allow read-only access to the sealed CRG environment and canonical interpreter;
+- allow read-only access to required system libraries and `/usr/bin/git`;
+- allow bounded process execution required by CRG and Git;
+- preserve process-group timeout and forced termination;
+- be stored or generated by immutable Runtime A code;
+- be hashed and recorded in the receipt;
+- fail closed when the sandbox command, profile or denial probes fail.
+
+An alternative operating-system isolation mechanism requires separate architecture
+approval before use.
+
+## Legacy CRG repository-mutation guard
+
+Before every CRG invocation, fail closed if any repository-root path exists:
+
+- `.code-review-graph.db`;
+- `.code-review-graph.db-wal`;
+- `.code-review-graph.db-shm`;
+- `.code-review-graph.db-journal`.
+
+Record Git status and protected-path identities before the command. After every
+CRG command verify:
+
+- Git status is unchanged;
+- no tracked or untracked repository path was added, removed or modified;
+- no legacy database or side file was moved or deleted;
+- only the private run and temporary directories changed.
+
+The adapter must never perform or permit legacy CRG migration.
 
 ## Normalized adapter result
 
@@ -114,21 +223,22 @@ Every result contains exactly:
   directory;
 - `truncated`: boolean;
 - `error_class`: `null` or one of `unsafe_command`, `private_paths`,
-  `version_mismatch`, `timeout`, `non_zero_exit`, `output_limit`,
-  `malformed_json`, `projection_invalid`, `internal_error`;
+  `environment_integrity`, `sandbox_unavailable`, `sandbox_denied`,
+  `legacy_repository_state`, `repository_mutation`, `version_mismatch`,
+  `timeout`, `non_zero_exit`, `output_limit`, `malformed_json`,
+  `projection_invalid`, `internal_error`;
 - `advisory`: `null` or the strict projection below.
 
 Required combinations:
 
 - omitted command: `status=disabled`, `version=null`, `error_class=null`,
   `advisory=null`;
-- successful version/build/detect: `status=available`, `version=2.3.6`,
+- successful trusted version/build/detect: `status=available`, `version=2.3.6`,
   `error_class=null`;
-- configured failure: `status=failed` with exactly one error class;
-- unsafe command, version mismatch, runtime-integrity failure or private-path
-  failure is fail-closed before analysis;
-- a valid configured CRG runtime failure is fail-open for Sol review and is
-  recorded without advisory data.
+- configured runtime failure after trust checks: `status=failed` with exactly one
+  error class and fail-open continuity toward normal Sol review;
+- environment, sandbox, path, legacy-state, repository-mutation, executable or
+  version trust failure is fail-closed before advisory analysis.
 
 ## Strict Sol advisory projection
 
@@ -186,48 +296,21 @@ WP6B must not weaken or bypass those gates.
 
 Graph data is private to one run. Cache only by:
 
-`2.3.6 + run-start-sha + current-head-sha`
+`2.3.6 + sealed-environment-manifest-sha256 + run-start-sha + current-head-sha`
 
 Build once per cache key. A trusted-host commit changes `current-head-sha` and
 invalidates the graph before the next review advisory.
 
 Enforce deterministic ceilings for:
 
-- version check duration and output;
-- build duration, stdout, stderr and graph storage;
+- version-check duration and output;
+- build duration, output and graph storage;
 - detect duration and output;
 - raw report size;
 - projected advisory size;
 - CRG builds per run.
 
-Verify that no CRG child process remains after success, timeout or failure.
-
-## Executable and path validation
-
-The configured CRG path must be:
-
-- absolute;
-- a real regular file;
-- non-symlink;
-- executable by the current user;
-- unchanged from bootstrap/preflight identity;
-- SHA-256 exact when a pinned local identity is configured;
-- version-exact.
-
-Every directory from project root through the run directory and CRG data paths
-must be real, contained and non-symlink. CRG may write only below the private run
-directory.
-
-## Terra task contract after promotion
-
-- Work on exactly the current task.
-- Return one structured unified diff only.
-- Preserve existing file modes.
-- Change only allowed paths.
-- Do not fabricate validation results.
-- Do not invoke or simulate Sol.
-- Do not modify immutable Runtime A.
-- Mark only the current task checkbox complete.
+Verify that no CRG or Git child process remains after success, timeout or failure.
 
 ## Candidate allowed paths
 
@@ -255,20 +338,22 @@ CRG data or unrelated product files.
 
 ### Task 1: Standalone bounded CRG adapter
 
-Implement executable/version/path validation, isolated environment creation,
+Implement complete environment and interpreter verification, executable and path
+validation, isolated child environment, OS sandbox launch, legacy-state guard,
 bounded process execution, raw private report handling, exact no-change
-normalization, strict projection, redaction and direct tests. Do not integrate
+normalization, strict projection, redaction and focused tests. Do not integrate
 with bootstrap, runner or Sol in this task.
 
 - [ ] Task 1 complete.
 
 ### Task 2: Original executable plumbing and receipts
 
-Add optional `--crg-command` support to bootstrap, install and preflight. Record
-and re-verify the original executable identity. Forward the validated executable,
-run-start SHA and current trusted head through controlled variables. Add CRG
-metadata and budget state to secret-free receipts. Preserve disabled legacy
-behavior. Do not modify Sol integration in this task.
+Add optional CRG environment, manifest and sandbox identity support to bootstrap,
+install and preflight. Record and re-verify the complete sealed environment,
+interpreter, command and sandbox profile. Forward only validated identities,
+run-start SHA and current trusted HEAD. Add secret-free CRG metadata and budget
+state to receipts. Preserve disabled legacy behavior. Do not modify Sol integration
+in this task.
 
 - [ ] Task 2 complete.
 
@@ -276,8 +361,8 @@ behavior. Do not modify Sol integration in this task.
 
 Build or reuse the graph by exact cache key, run detect, create the strict bounded
 projection and append only that projection to the immutable Runtime A Sol review
-prompt. Preserve the normal independent review for every valid CRG runtime
-failure. Update focused tests and documentation.
+prompt. Preserve normal independent review for every valid CRG runtime failure.
+Update focused tests and documentation.
 
 - [ ] Task 3 complete.
 
@@ -295,9 +380,16 @@ Focused tests must include:
 
 - disabled mode;
 - exact version success and mismatch;
+- console-command, interpreter and full-environment identity success and mismatch;
+- added, missing, changed and mode-changed environment entries;
+- unexpected external symlink target rejection;
 - relative, nonexistent, non-executable and symlink command rejection;
-- command SHA-256 identity success and mismatch;
-- private-path and symlink containment rejection;
+- private-path and symlink-containment rejection;
+- missing sandbox and sandbox-profile mismatch;
+- denied network and denied outside-write probes;
+- exact `CRG_PARSE_EXECUTOR=thread` and `CRG_PARSE_WORKERS=1` child environment;
+- legacy database and side-file rejection;
+- unchanged repository before and after every CRG command;
 - version/build/detect timeout;
 - non-zero exit;
 - stdout, stderr, report and graph-storage ceilings;
@@ -307,20 +399,22 @@ Focused tests must include:
 - credential redaction and absence from child environment;
 - exact argument arrays and `shell: false`;
 - cache reuse for identical head and invalidation after trusted commit;
-- fail-open Sol continuity;
-- no remaining CRG process;
+- fail-open Sol continuity after trusted runtime failures;
+- fail-closed behavior for trust and repository-mutation failures;
+- no remaining CRG or Git process;
 - unchanged behavior when CRG is omitted.
 
 ## Promotion gate
 
 Promotion into `docs/plans/` requires all of the following:
 
+- complete CRG environment and interpreter seal proof;
+- macOS sandbox availability and denial proof;
+- independent review of this exact planning file with no blocking finding;
 - explicit authorisation to prepare and execute WP6B;
-- independent review of this exact planning file;
-- no blocking plan finding;
 - current PR head has green CI;
 - Runtime A evidence remains valid;
-- CRG local install identity still matches the proof;
+- CRG package identity still matches the installation proof;
 - promoted copy is exact except for status, executable path-policy metadata and
   task checkboxes required by the plan parser.
 
@@ -330,7 +424,7 @@ WP6B completes only when:
 
 - immutable Runtime A performs the implementation and independent Sol review;
 - all tasks pass focused and repository-wide tests;
-- branch and runtime identity remain unchanged through the run;
+- branch, runtime, CRG environment and sandbox identity remain unchanged;
 - GitHub CI passes;
 - a separate independent diff review reports no blocking finding;
 - Runtime B is bootstrapped from the reviewed candidate;
