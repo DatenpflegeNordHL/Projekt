@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -35,7 +36,10 @@ test("installer pins the exact project as Codex workspace writable root", () => 
     join(tools, "codex"),
     "#!/bin/sh\nif [ \"${1:-}\" = \"--version\" ]; then echo 'codex-cli 0.144.6'; exit 0; fi\nexit 0\n",
   );
-  const mex = executable(join(tools, "mex"), "#!/bin/sh\nexit 0\n");
+  const mex = executable(
+    join(tools, "mex"),
+    "#!/bin/sh\nif [ \"${1:-}\" = \"--version\" ]; then echo 'mex 0.6.3'; exit 0; fi\nif [ \"${1:-}\" = \"check\" ] && [ \"${2:-}\" = \"--json\" ]; then echo '{\"score\":100}'; exit 0; fi\nexit 0\n",
+  );
   const ralphex = executable(
     join(tools, "ralphex"),
     "#!/bin/sh\nif [ \"${1:-}\" = \"--version\" ]; then echo 'ralphex 1.6.0'; exit 0; fi\nexit 0\n",
@@ -66,6 +70,9 @@ test("installer pins the exact project as Codex workspace writable root", () => 
       readFileSync(join(project, ".codexlooper", "install-state.json"), "utf8"),
     );
     assert.equal(state.writable_root, project);
+    assert.equal(state.runtime.id, result.runtimeId);
+    assert.equal(state.budgets.max_builder_calls, 12);
+    assert.ok(existsSync(state.runtime.manifest));
     assert.equal(result.runCommand, join(project, ".codexlooper", "bin", "codexlooper"));
   } finally {
     rmSync(root, { recursive: true, force: true });
