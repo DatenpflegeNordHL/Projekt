@@ -76,6 +76,14 @@ test("installer pins the exact project as Codex workspace writable root", () => 
     assert.equal(state.writable_root, project);
     assert.equal(state.runtime.id, result.runtimeId);
     assert.equal(state.budgets.max_builder_calls, 12);
+    assert.deepEqual(state.branch_policy, {
+      mode: "lock-current-branch-at-run-start",
+      repository_root: "exact",
+      detached_head: "reject",
+      ancestry: "run-start-sha-must-remain-ancestor",
+      ralphex_branch_mutation: "reject",
+    });
+    assert.deepEqual(result.branchPolicy, state.branch_policy);
     assert.ok(existsSync(state.runtime.manifest));
     assert.equal(result.runCommand, join(project, ".codexlooper", "bin", "codexlooper"));
   } finally {
