@@ -2,11 +2,18 @@ import { accessSync, constants, existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { assertGitAuthority } from "../src/git-authority.mjs";
 import { verifyRuntimeManifest } from "../src/runtime-integrity.mjs";
 
 const THIS_FILE = fileURLToPath(import.meta.url);
 const REQUIRED_ARGUMENTS = ["--project", "--mex-command", "--real-codex", "--ralphex-command"];
-const OPTIONAL_ARGUMENTS = new Set(["--runtime-manifest", "--runtime-manifest-sha256"]);
+const OPTIONAL_ARGUMENTS = new Set([
+  "--runtime-manifest",
+  "--runtime-manifest-sha256",
+  "--expected-branch",
+  "--run-start-sha",
+  "--expected-project-root",
+]);
 const ALLOWED_ARGUMENTS = new Set([...REQUIRED_ARGUMENTS, ...OPTIONAL_ARGUMENTS]);
 
 function fail(message) {
@@ -75,6 +82,24 @@ function atLeast(actual, minimum) {
   return true;
 }
 
+function optionalAuthority(args, project) {
+  const expectedBranch = args["--expected-branch"] || process.env.CODEXLOOPER_EXPECTED_BRANCH;
+  const runStartSha = args["--run-start-sha"] || process.env.CODEXLOOPER_RUN_START_SHA;
+  const expectedProjectRoot =
+    args["--expected-project-root"] || process.env.CODEXLOOPER_EXPECTED_PROJECT_ROOT;
+  const configured = [expectedBranch, runStartSha, expectedProjectRoot].filter(Boolean).length;
+  if (configured === 0) return null;
+  if (configured !== 3) fail("Git authority evidence is incomplete");
+  return assertGitAuthority({
+    projectRoot: project,
+    expectedProjectRoot,
+    expectedBranch,
+    runStartSha,
+    sourceEnv: process.env,
+    label: "Preflight Git authority",
+  });
+}
+
 export function runPreflight(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const project = resolve(args["--project"]);
@@ -89,6 +114,7 @@ export function runPreflight(argv = process.argv.slice(2)) {
   const runtime = verifyRuntimeManifest({
     manifestPath,
     expectedManifestSha256: manifestSha256,
+    expectedRuntimeDirectory: process.env.CODEXLOOPER_RUNTIME_DIR,
     expectedNodeExecutable: process.execPath,
   });
   const expectedSourceCommit = process.env.CODEXLOOPER_RUNTIME_SOURCE_COMMIT;
@@ -96,6 +122,7 @@ export function runPreflight(argv = process.argv.slice(2)) {
     fail("Runtime source commit does not match the installed launcher");
   }
 
+  optionalAuthority(args, project);
   requireExecutable(mex, "MEX command");
   requireExecutable(codex, "Codex command");
   requireExecutable(ralphex, "Ralphex command");
@@ -103,8 +130,10 @@ export function runPreflight(argv = process.argv.slice(2)) {
   const gitRoot = run("/usr/bin/git", ["rev-parse", "--show-toplevel"], project, "Git root check");
   if (resolve(gitRoot) !== project) fail("Project must be the exact Git root");
 
-  const agentAnchorExists = existsSync(resolve(project, "AGENTS.md")) || existsSync(resolve(project, ".mex", "AGENTS.md"));
-  const routerExists = existsSync(resolve(project, "ROUTER.md")) || existsSync(resolve(project, ".mex", "ROUTER.md"));
+  const agentAnchorExists =
+    existsSync(resolve(project, "AGENTS.md")) || existsSync(resolve(project, ".mex", "AGENTS.md"));
+  const routerExists =
+    existsSync(resolve(project, "ROUTER.md")) || existsSync(resolve(project, ".mex", "ROUTER.md"));
   if (!agentAnchorExists || !routerExists) {
     fail("MEX scaffold is incomplete: AGENTS.md and ROUTER.md are required");
   }
@@ -126,8 +155,12 @@ export function runPreflight(argv = process.argv.slice(2)) {
   const codexVersion = parseVersion(run(codex, ["--version"], project, "Codex version check"), "Codex");
   if (!atLeast(codexVersion, [0, 130, 0])) fail("Codex CLI 0.130.0 or newer is required");
 
-  const ralphexVersion = parseVersion(run(ralphex, ["--version"], project, "Ralphex version check"), "Ralphex");
+  const ralphexVersion = parseVersion(
+    run(ralphex, ["--version"], project, "Ralphex version check"),
+    "Ralphex",
+  );
   if (!atLeast(ralphexVersion, [1, 6, 0])) fail("Ralphex 1.6.0 or newer is required");
+  optionalAuthority(args, project);
   return "CODEXLOOPER_PREFLIGHT=PASS";
 }
 
