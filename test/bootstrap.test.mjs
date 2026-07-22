@@ -52,6 +52,10 @@ function fixture({ customAgents = false } = {}) {
     join(tools, "mex"),
     `#!/bin/sh
 set -eu
+if [ "\${1:-}" = "--version" ]; then
+  echo 'mex 0.6.3'
+  exit 0
+fi
 if [ "\${1:-}" = "setup" ]; then
   mkdir -p .mex/events
   if [ ! -f .mex/events/decisions.jsonl ]; then
@@ -98,9 +102,13 @@ test("bootstraps a clean Git project without replacing existing project files", 
     assert.ok(existsSync(join(current.project, "docs", "plans", "README.md")));
     assert.ok(existsSync(join(current.project, ".mex", "events", "decisions.jsonl")));
     assert.ok(existsSync(result.runCommand));
+    assert.ok(existsSync(result.runtimeManifest));
+    assert.equal(result.receipt.schema, "codexlooper.bootstrap.v2");
     assert.equal(result.receipt.status, "completed");
     assert.equal(result.receipt.project_name, "target-project");
     assert.equal(result.receipt.mex_score, 100);
+    assert.equal(result.receipt.runtime.id, result.runtimeId);
+    assert.equal(result.receipt.budgets.max_builder_calls, 12);
     assert.equal(result.receipt.secret_free, true);
     assert.equal(
       result.receipt.files.find((entry) => entry.path === "AGENTS.md")?.status,
@@ -123,6 +131,7 @@ test("bootstrap is idempotent after committing its visible scaffold", () => {
     assert.equal(second.receipt.visible_changes.length, 0);
     assert.ok(second.receipt.files.every((entry) => entry.status === "preserved"));
     assert.equal(second.runCommand, first.runCommand);
+    assert.equal(second.runtimeId, first.runtimeId);
   } finally {
     rmSync(current.root, { recursive: true, force: true });
   }
