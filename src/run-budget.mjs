@@ -50,9 +50,17 @@ function positiveInteger(value, label) {
 }
 
 function canonicalExistingOrProspective(path) {
-  if (existsSync(path)) return realpathSync(path);
-  const parent = realpathSync(dirname(path));
-  return resolve(parent, basename(path));
+  let cursor = resolve(path);
+  const suffix = [];
+  while (!existsSync(cursor)) {
+    const parent = dirname(cursor);
+    if (parent === cursor) {
+      fail("CODEXLOOPER_BUDGET_INVALID", `Unable to resolve private run path: ${path}`);
+    }
+    suffix.unshift(basename(cursor));
+    cursor = parent;
+  }
+  return resolve(realpathSync(cursor), ...suffix);
 }
 
 function requirePrivateRunPath(path, projectRoot, label) {
@@ -61,7 +69,7 @@ function requirePrivateRunPath(path, projectRoot, label) {
   }
   const project = realpathSync(projectRoot);
   const root = resolve(project, ".codexlooper", "runs");
-  const target = canonicalExistingOrProspective(resolve(path));
+  const target = canonicalExistingOrProspective(path);
   const rel = relative(root, target);
   if (!rel || rel.startsWith("..") || isAbsolute(rel)) {
     fail("CODEXLOOPER_BUDGET_INVALID", `${label} must stay inside .codexlooper/runs`);
