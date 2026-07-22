@@ -20,6 +20,9 @@ export const RUNTIME_FILES = Object.freeze([
   "bin/codex-closerouter.mjs",
   "bin/terra-as-claude.mjs",
   "bin/sol-review.mjs",
+  "bin/codex-runtime.mjs",
+  "bin/terra-runtime.mjs",
+  "bin/sol-runtime.mjs",
   "scripts/preflight.mjs",
   "scripts/run.mjs",
   "scripts/vcs-guard.mjs",
@@ -36,6 +39,7 @@ export const RUNTIME_FILES = Object.freeze([
   "src/git-supervisor.mjs",
   "src/codex-diagnostics.mjs",
   "src/telemetry.mjs",
+  "src/run-hardened.mjs",
   "src/run.mjs",
 ]);
 
@@ -159,6 +163,10 @@ function runtimeSeed({ sourceCommit, node, externalTools, budgets, files }) {
   };
 }
 
+function runtimeIdFromSeed(seed) {
+  return sha256(JSON.stringify(seed));
+}
+
 function parseManifest(path) {
   let manifest;
   try {
@@ -170,6 +178,16 @@ function parseManifest(path) {
     fail("CODEXLOOPER_RUNTIME_MANIFEST_INVALID", "Runtime manifest schema is invalid");
   }
   return manifest;
+}
+
+function manifestSeed(manifest) {
+  return runtimeSeed({
+    sourceCommit: manifest.source_commit,
+    node: manifest.node,
+    externalTools: manifest.external_tools,
+    budgets: manifest.budgets,
+    files: manifest.files,
+  });
 }
 
 function assertPrivateReadOnlyDirectory(path, label) {
@@ -205,12 +223,19 @@ export function verifyRuntimeManifest({
     fail("CODEXLOOPER_RUNTIME_INTEGRITY_FAILED", "Runtime manifest SHA-256 mismatch");
   }
   const manifest = parseManifest(canonicalManifest);
+  const recalculatedRuntimeId = runtimeIdFromSeed(manifestSeed(manifest));
+  if (manifest.runtime_id !== recalculatedRuntimeId) {
+    fail("CODEXLOOPER_RUNTIME_INTEGRITY_FAILED", "Runtime manifest content does not match its runtime ID");
+  }
   const runtimeDirectory = realpathSync(dirname(canonicalManifest));
   if (expectedRuntimeDirectory && runtimeDirectory !== realpathSync(expectedRuntimeDirectory)) {
     fail("CODEXLOOPER_RUNTIME_INTEGRITY_FAILED", "Runtime directory does not match installed state");
   }
   if (manifest.runtime_directory !== runtimeDirectory) {
     fail("CODEXLOOPER_RUNTIME_INTEGRITY_FAILED", "Runtime manifest records a different runtime directory");
+  }
+  if (runtimeDirectory !== resolve(dirname(runtimeDirectory), manifest.runtime_id)) {
+    fail("CODEXLOOPER_RUNTIME_INTEGRITY_FAILED", "Runtime directory name does not match runtime ID");
   }
   assertPrivateReadOnlyDirectory(runtimeDirectory, "Runtime directory");
 
@@ -266,7 +291,12 @@ export function installImmutableRuntime({
 } = {}) {
   const source = realpathSync(sourceRoot);
   const project = realpathSync(projectRoot);
-  const trackedStatus = git(source, ["status", "--porcelain=v1", "--untracked-files=no"], "Runtime source status", sourceEnv);
+  const trackedStatus = git(
+    source,
+    ["status", "--porcelain=v1", "--untracked-files=no"],
+    "Runtime source status",
+    sourceEnv,
+  );
   if (trackedStatus) {
     fail("CODEXLOOPER_RUNTIME_SOURCE_DIRTY", "Tracked CodexLooper runtime source files must be clean before install");
   }
@@ -288,7 +318,7 @@ export function installImmutableRuntime({
   );
   const files = RUNTIME_FILES.map((path) => sourceFileRecord(source, path));
   const seed = runtimeSeed({ sourceCommit, node, externalTools: tools, budgets, files });
-  const runtimeId = sha256(JSON.stringify(seed));
+  const runtimeId = runtimeIdFromSeed(seed);
   const runtimeRoot = resolve(project, ".codexlooper", "runtime");
   const runtimeDirectory = resolve(runtimeRoot, runtimeId);
   const manifestPath = resolve(runtimeDirectory, "manifest.json");
@@ -302,7 +332,7 @@ export function installImmutableRuntime({
       expectedNodeExecutable: node.path,
     });
     if (verified.manifest.runtime_id !== runtimeId) {
-      fail("CODEXLOOPER_RUNTIME_INTEGRITY_FAILED", "Existing runtime ID does not match its content seed");
+      fail("CODEXLOOPER_RUNTIME_INTEGRITY_FAILED", "Existing runtime ID does not match expected source content");
     }
     return { ...verified, runtimeId, sourceCommit };
   }
