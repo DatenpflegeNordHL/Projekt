@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
+import { verifyRuntimeManifest } from "./runtime-integrity.mjs";
 
 function fail(code, message) {
   const error = new Error(message);
@@ -53,6 +54,30 @@ function branchName(value) {
   return value;
 }
 
+function verifyConfiguredRuntime(sourceEnv) {
+  const manifestPath = sourceEnv.CODEXLOOPER_RUNTIME_MANIFEST;
+  const manifestSha256 = sourceEnv.CODEXLOOPER_RUNTIME_MANIFEST_SHA256;
+  const runtimeDirectory = sourceEnv.CODEXLOOPER_RUNTIME_DIR;
+  const configured = [manifestPath, manifestSha256, runtimeDirectory].filter(Boolean).length;
+  if (configured === 0) return null;
+  if (configured !== 3) {
+    fail("CODEXLOOPER_RUNTIME_MANIFEST_INVALID", "Runtime integrity environment is incomplete");
+  }
+  try {
+    return verifyRuntimeManifest({
+      manifestPath,
+      expectedManifestSha256: manifestSha256,
+      expectedRuntimeDirectory: runtimeDirectory,
+      expectedNodeExecutable: process.execPath,
+    });
+  } catch (error) {
+    fail(
+      error.code || "CODEXLOOPER_RUNTIME_INTEGRITY_FAILED",
+      `Runtime integrity failed during Git authority check: ${error.message}`,
+    );
+  }
+}
+
 export function readGitAuthority(projectRoot, sourceEnv = process.env) {
   const root = realpathSync(projectRoot);
   const reportedRoot = realpathSync(git(root, ["rev-parse", "--show-toplevel"], "Git root check", sourceEnv));
@@ -78,6 +103,7 @@ export function assertGitAuthority({
   sourceEnv = process.env,
   label = "Git authority check",
 } = {}) {
+  verifyConfiguredRuntime(sourceEnv);
   const current = readGitAuthority(projectRoot, sourceEnv);
   const expectedRoot = realpathSync(expectedProjectRoot || projectRoot);
   if (current.root !== expectedRoot) {
