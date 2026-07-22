@@ -100,6 +100,19 @@ function optionalAuthority(args, project) {
   });
 }
 
+function verifiedRuntime(manifestPath, manifestSha256) {
+  try {
+    return verifyRuntimeManifest({
+      manifestPath,
+      expectedManifestSha256: manifestSha256,
+      expectedRuntimeDirectory: process.env.CODEXLOOPER_RUNTIME_DIR,
+      expectedNodeExecutable: process.execPath,
+    });
+  } catch (error) {
+    fail(`Runtime file mode changed or integrity verification failed: ${error.message}`);
+  }
+}
+
 export function runPreflight(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const project = resolve(args["--project"]);
@@ -111,12 +124,7 @@ export function runPreflight(argv = process.argv.slice(2)) {
     args["--runtime-manifest-sha256"] || process.env.CODEXLOOPER_RUNTIME_MANIFEST_SHA256;
   if (!manifestPath || !manifestSha256) fail("Immutable runtime manifest evidence is required");
 
-  const runtime = verifyRuntimeManifest({
-    manifestPath,
-    expectedManifestSha256: manifestSha256,
-    expectedRuntimeDirectory: process.env.CODEXLOOPER_RUNTIME_DIR,
-    expectedNodeExecutable: process.execPath,
-  });
+  const runtime = verifiedRuntime(manifestPath, manifestSha256);
   const expectedSourceCommit = process.env.CODEXLOOPER_RUNTIME_SOURCE_COMMIT;
   if (expectedSourceCommit && runtime.manifest.source_commit !== expectedSourceCommit) {
     fail("Runtime source commit does not match the installed launcher");
