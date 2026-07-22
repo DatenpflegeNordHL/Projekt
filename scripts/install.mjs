@@ -42,6 +42,13 @@ const DEFAULT_BUDGETS = Object.freeze({
   model_call_reserve_usd: 0.05,
   max_crg_builds: 0,
 });
+const BRANCH_POLICY = Object.freeze({
+  mode: "lock-current-branch-at-run-start",
+  repository_root: "exact",
+  detached_head: "reject",
+  ancestry: "run-start-sha-must-remain-ancestor",
+  ralphex_branch_mutation: "reject",
+});
 
 function fail(message) {
   throw new Error(message);
@@ -396,6 +403,7 @@ export function install(argv = process.argv.slice(2)) {
     run_command: runCommand,
     codex_home: codexHome,
     writable_root: project,
+    branch_policy: BRANCH_POLICY,
     runtime: {
       schema: runtime.manifest.schema,
       id: runtime.runtimeId,
@@ -422,6 +430,7 @@ export function install(argv = process.argv.slice(2)) {
     runtimeManifest: runtime.manifestPath,
     runtimeManifestSha256: runtime.manifestSha256,
     runtimeId: runtime.runtimeId,
+    branchPolicy: BRANCH_POLICY,
     budgets,
   };
 }
