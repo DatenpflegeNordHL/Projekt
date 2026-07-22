@@ -58,6 +58,7 @@ exit 98
       ralphex,
       outputPath: output,
       now: () => new Date("2026-07-22T17:30:00.000Z"),
+      sourceCleanCheck: () => {},
     });
 
     assert.equal(evidence.status, "PASS");
