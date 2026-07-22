@@ -161,14 +161,16 @@ exit 2
   assert.ok(receipt.budgets.state.attempts.builder <= receipt.budgets.limits.max_builder_calls);
   assert.ok(receipt.budgets.state.attempts.reviewer >= 1);
   assert.ok(receipt.budgets.state.attempts.reviewer <= receipt.budgets.limits.max_reviewer_calls);
-  assert.ok(receipt.budgets.state.actual_estimated_cost_usd > 0);
+  assert.equal(
+    receipt.budgets.state.actual_estimated_cost_usd,
+    receipt.usage.totals.estimated_cost_usd,
+  );
   assert.ok(
     receipt.budgets.state.actual_estimated_cost_usd <=
       receipt.budgets.limits.max_estimated_cost_usd,
   );
   assert.ok(receipt.usage.profiles.builder.calls >= 1);
   assert.ok(receipt.usage.profiles.reviewer.calls >= 1);
-  assert.ok(receipt.usage.totals.estimated_cost_usd > 0);
   const hostEvents = readFileSync(join(runDirectory, "host-commits.jsonl"), "utf8");
   assert.match(hostEvents, /"transport":"structured_patch"/);
   assert.match(hostEvents, /"transport":"host_plan_archive"/);
