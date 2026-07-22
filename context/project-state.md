@@ -12,7 +12,7 @@
 - Rejected Terra builder patches are retained privately for diagnostics.
 - The current complete local regression result is 68 tests passed, 0 failed.
 - WP6A Loop Trust Hardening is complete.
-- The original CRG v2.3.6 executable is installed and locally proven without graph or model execution.
+- The original CRG v2.3.6 package is installed and locally proven without graph or model execution.
 
 ## Core CLI status
 
@@ -74,28 +74,52 @@ Evidence is recorded in:
 - exact CLI output: `code-review-graph 2.3.6`;
 - command SHA-256: `1c0e3e3ad5383069926583667f7c536e8111deddc793189e15d31f34e1d6d604`;
 - dependency freeze SHA-256: `08f4a3b2a2265df20646078706006232f7d5137160949e0c5e7a4223faa950af`;
-- command regular, executable and non-symlink: PASS;
 - graph builds: 0;
 - model calls: 0;
 - separate `code-review-graph install` subcommand used: false.
 
+## WP6B independent plan review
+
+Evidence is recorded in:
+`docs/architecture/WP6B_INDEPENDENT_PLAN_REVIEW.md`
+
+The exact upstream source review found four blocking gaps before promotion:
+
+1. the console-script hash does not cover the Python interpreter, package or dependencies;
+2. CRG defaults to process-based parser fan-out with up to eight workers;
+3. legacy repository-root CRG database files may be moved or deleted by upstream code;
+4. a minimal child environment does not provide OS-enforced network and write isolation.
+
+The planning specification now requires:
+
+- complete isolated-environment and interpreter manifest verification;
+- a read-only CRG environment seal;
+- `CRG_PARSE_EXECUTOR=thread` and `CRG_PARSE_WORKERS=1`;
+- fail-closed legacy database guards and unchanged-repository proof;
+- a verified macOS sandbox denying network and writes outside private run paths.
+
 ## Fixed next sequence
 
-1. **WP6B final plan review**
-   - canonical specification remains at
-     `docs/planning/WP6B_READONLY_CODE_REVIEW_GRAPH_INTEGRATION.md`;
-   - WP6A and original-executable prerequisites are satisfied;
-   - perform an independent review of the exact planning file;
-   - keep the plan non-executable until explicit WP6B execution authorisation.
-2. **WP6B implementation under Runtime A**
-   - after explicit authorisation, promote the reviewed bounded copy to `docs/plans/`;
-   - implement the standalone adapter, original executable plumbing and advisory-only Sol integration;
-   - keep CRG fail-open toward the independent Sol review;
+1. **CRG environment seal proof**
+   - manifest the full isolated environment and canonical Python interpreter;
+   - seal the environment read-only;
+   - prove exact post-seal version and unchanged manifest.
+2. **macOS sandbox proof**
+   - verify the sandbox command and profile;
+   - prove network denial;
+   - prove write denial outside private run and temporary paths.
+3. **WP6B final plan review**
+   - review the exact updated planning specification;
+   - require no blocking finding;
+   - keep the plan outside `docs/plans/` until explicit execution authorisation.
+4. **WP6B implementation under Runtime A**
+   - after explicit authorisation, promote the exact reviewed bounded plan;
+   - implement adapter, original executable plumbing and advisory-only Sol integration;
    - pass focused tests, repository-wide tests, CI and independent diff review;
-   - bootstrap Runtime B from the reviewed candidate.
-3. **WP6C isolated live CRG smoke**
+   - bootstrap Runtime B.
+5. **WP6C isolated live CRG smoke**
    - prove success, no-change, fail-open, branch-lock, runtime-tamper and secret-leak cases in a fixture repository.
-4. Obtain explicit merge authorisation, merge, then bootstrap Runtime C from `main`.
+6. Obtain explicit merge authorisation, merge, then bootstrap Runtime C from `main`.
 
 No step may be skipped or reordered because a later test passes.
 
@@ -104,15 +128,15 @@ No step may be skipped or reordered because a later test passes.
 - never run the separate `code-review-graph install` integration subcommand;
 - never expose CRG MCP or write-capable tools to Terra or Sol;
 - never pass raw CRG output directly into the Sol prompt;
-- re-check command path, SHA-256 and exact version during bootstrap and preflight;
-- keep graph data private to one run;
-- no real CRG graph build before WP6C.
+- no real CRG graph build before WP6C;
+- no model spending before explicit WP6B execution authorisation.
 
 ## Remaining external setup
 
+- Complete the CRG environment seal and macOS sandbox proofs.
 - Rename the GitHub repository from `Projekt` to `codexlooper` when convenient.
 - Store the local CloseRouter credential securely before an authorised paid model run.
 
 ## Next use gate
 
-WP6A and the original CRG installation prerequisite are complete. The immediate next action is independent review of the exact WP6B planning specification. Promotion into `docs/plans/`, Runtime A execution, model spending, CRG graph building, PR merge and release remain blocked until their stated authorisation gates are satisfied.
+WP6A and the original CRG package installation are complete. WP6B remains non-executable. The immediate next action is the local full-environment seal and sandbox proof. Promotion into `docs/plans/`, Runtime A execution, model spending, CRG graph building, PR merge and release remain blocked.
