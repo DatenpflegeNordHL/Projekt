@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import {
   chmodSync,
@@ -15,7 +16,8 @@ import { readRunBudget } from "../src/run-budget.mjs";
 import { verifyRuntimeManifest } from "../src/runtime-integrity.mjs";
 
 const THIS_FILE = fileURLToPath(import.meta.url);
-const WORKER_FLAG = "CODEXLOOPER_INTERNAL_RUN_WORKER";
+const WORKER_TOKEN_FLAG = "CODEXLOOPER_INTERNAL_RUN_WORKER_TOKEN";
+const WORKER_PARENT_FLAG = "CODEXLOOPER_INTERNAL_RUN_WORKER_PARENT";
 
 function fail(code, message) {
   const error = new Error(message);
@@ -206,12 +208,27 @@ export async function spawnSupervised(command, args, {
   }
 }
 
+function workerAuthorized() {
+  const token = process.env[WORKER_TOKEN_FLAG];
+  const expectedParent = process.env[WORKER_PARENT_FLAG];
+  return (
+    typeof token === "string" &&
+    /^[0-9a-f]{48}$/.test(token) &&
+    expectedParent === String(process.ppid)
+  );
+}
+
 async function superviseWorker() {
   const timeoutMs = positiveInteger(
     process.env.CODEXLOOPER_MAX_RUN_DURATION_MS,
     "CODEXLOOPER_MAX_RUN_DURATION_MS",
   );
-  const env = { ...process.env, [WORKER_FLAG]: "1" };
+  const token = randomBytes(24).toString("hex");
+  const env = {
+    ...process.env,
+    [WORKER_TOKEN_FLAG]: token,
+    [WORKER_PARENT_FLAG]: String(process.pid),
+  };
   const exitCode = await spawnSupervised(process.execPath, [THIS_FILE, ...process.argv.slice(2)], {
     cwd: process.cwd(),
     env,
@@ -224,7 +241,7 @@ async function superviseWorker() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === THIS_FILE) {
-  if (process.env[WORKER_FLAG] === "1") {
+  if (workerAuthorized()) {
     await runWorker();
   } else {
     try {
