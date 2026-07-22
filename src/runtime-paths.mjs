@@ -23,7 +23,7 @@ function validateSegment(segment) {
     segment.includes("\0") ||
     segment.includes(sep)
   ) {
-    fail("Runtime directory segment is invalid");
+    fail(`Unsafe runtime path segment: ${segment}`);
   }
 }
 
@@ -36,17 +36,17 @@ export function ensurePrivateDirectoryChain(projectRoot, segments) {
     current = resolve(parent, segment);
     const rel = relative(root, current);
     if (!rel || rel.startsWith("..") || rel.split(sep).includes("..")) {
-      fail("Runtime directory escaped the project root");
+      fail(`Unsafe runtime path segment escaped the project: ${segment}`);
     }
     if (existsSync(current)) {
       const stat = lstatSync(current);
       if (stat.isSymbolicLink() || !stat.isDirectory()) {
-        fail(`Runtime path is not a real directory: ${segment}`);
+        fail(`Unsafe runtime path segment: ${segment}`);
       }
       const realParent = realpathSync(dirname(current));
       const realCurrent = realpathSync(current);
       if (realCurrent !== resolve(realParent, segment)) {
-        fail(`Runtime path traverses a symlink: ${segment}`);
+        fail(`Unsafe runtime path segment traverses a symlink: ${segment}`);
       }
     } else {
       mkdirSync(current, { mode: 0o700 });
