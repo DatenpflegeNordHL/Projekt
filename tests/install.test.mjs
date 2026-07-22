@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { install } from "../scripts/install.mjs";
 import { runPreflight } from "../scripts/preflight.mjs";
+import { removeTree } from "../test/helpers/remove-tree.mjs";
 
 function executable(path, content) {
   writeFileSync(path, content, { mode: 0o700 });
@@ -57,7 +58,6 @@ if (process.argv[2] === "--version") {
 if (!process.env.CLOSEROUTER_API_KEY) process.exit(31);
 if (process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GITHUB_TOKEN) process.exit(32);
 const args = process.argv.slice(2);
-const prompt = readFileSync(0, "utf8");
 const modelArg = args.find((value) => value.startsWith('model="')) || "model=unknown";
 let text;
 if (modelArg.includes("gpt-5.6-sol")) {
@@ -164,10 +164,10 @@ test("installs isolated Terra, Sol, VCS guard and immutable runner", () => {
   try {
     const result = installFixture(fixture);
     const ralphexConfig = readFileSync(result.ralphexConfig, "utf8");
-    assert.match(ralphexConfig, new RegExp(result.terraExecutor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.ok(ralphexConfig.includes(`claude_command = ${result.terraExecutor}`));
     assert.match(ralphexConfig, /external_review_tool = custom/);
-    assert.match(ralphexConfig, new RegExp(result.solReviewer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-    assert.match(ralphexConfig, new RegExp(result.ralphexVcsGuard.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.ok(ralphexConfig.includes(`custom_review_script = ${result.solReviewer}`));
+    assert.ok(ralphexConfig.includes(`vcs_command = ${result.ralphexVcsGuard}`));
     assert.match(ralphexConfig, /move_plan_on_completion = false/);
     assert.match(ralphexConfig, /max_iterations = 12/);
 
@@ -200,7 +200,7 @@ test("installs isolated Terra, Sol, VCS guard and immutable runner", () => {
     assert.equal(parsed.runtime.id, result.runtimeId);
     assert.equal(parsed.budgets.max_builder_calls, 12);
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true });
+    removeTree(fixture.root);
   }
 });
 
@@ -226,7 +226,7 @@ test("preflight validates immutable runtime, MEX, Codex and Ralphex", () => {
       "CODEXLOOPER_PREFLIGHT=PASS",
     );
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true });
+    removeTree(fixture.root);
   }
 });
 
@@ -258,7 +258,7 @@ test("runtime tampering blocks preflight before any model execution", () => {
       /Runtime file mode changed|Runtime file hash changed/,
     );
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true });
+    removeTree(fixture.root);
   }
 });
 
@@ -284,7 +284,7 @@ test("controlled launcher preserves stdin and strips unrelated secrets", () => {
     );
     assert.equal(invocation.status, 0, invocation.stderr);
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true });
+    removeTree(fixture.root);
   }
 });
 
@@ -337,7 +337,7 @@ test("Terra and Sol wrappers remain separate read-only invocations", () => {
     assert.match(usage, /"profile":"reviewer"/);
   } finally {
     rmSync(promptFile, { force: true });
-    rmSync(fixture.root, { recursive: true, force: true });
+    removeTree(fixture.root);
   }
 });
 
@@ -381,7 +381,7 @@ test("generated runner preserves branch, enforces budgets and archives plan thro
     assert.match(hostEvents, /"transport":"structured_patch"/);
     assert.match(hostEvents, /"transport":"host_plan_archive"/);
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true });
+    removeTree(fixture.root);
   }
 });
 
@@ -407,7 +407,7 @@ test("generated runner rejects nested plans before Ralphex can collide completio
     assert.match(run.stderr, /CODEXLOOPER_PLAN_INVALID: Plan must be a direct file inside docs\/plans/);
     assert.equal(existsSync(join(fixture.project, ".codexlooper", "runs")), false);
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true });
+    removeTree(fixture.root);
   }
 });
 
@@ -416,19 +416,19 @@ test("installer rejects obsolete tools, unsafe budgets and unknown arguments", (
   try {
     assert.throws(() => installFixture(oldCodex), /0\.130\.0 or newer/);
   } finally {
-    rmSync(oldCodex.root, { recursive: true, force: true });
+    removeTree(oldCodex.root);
   }
   const oldRalphex = createFixture("0.130.0", "1.5.1");
   try {
     assert.throws(() => installFixture(oldRalphex), /Ralphex 1\.6\.0 or newer/);
   } finally {
-    rmSync(oldRalphex.root, { recursive: true, force: true });
+    removeTree(oldRalphex.root);
   }
   const oldMex = createFixture("0.130.0", "1.6.0", "0.6.2");
   try {
     assert.throws(() => installFixture(oldMex), /MEX 0\.6\.3 or newer/);
   } finally {
-    rmSync(oldMex.root, { recursive: true, force: true });
+    removeTree(oldMex.root);
   }
   const invalidBudget = createFixture();
   try {
@@ -437,7 +437,7 @@ test("installer rejects obsolete tools, unsafe budgets and unknown arguments", (
       /Maximum builder calls is outside the allowed range/,
     );
   } finally {
-    rmSync(invalidBudget.root, { recursive: true, force: true });
+    removeTree(invalidBudget.root);
   }
   assert.throws(() => install(["--surprise", "value"]), /Unknown argument/);
   assert.throws(() => runPreflight(["--surprise", "value"]), /Unknown argument/);
