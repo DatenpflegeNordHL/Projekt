@@ -6,13 +6,13 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { install } from "../scripts/install.mjs";
+import { removeTree } from "./helpers/remove-tree.mjs";
 
 function run(command, args, cwd) {
   const result = spawnSync(command, args, { cwd, encoding: "utf8" });
@@ -75,6 +75,6 @@ test("installer pins the exact project as Codex workspace writable root", () => 
     assert.ok(existsSync(state.runtime.manifest));
     assert.equal(result.runCommand, join(project, ".codexlooper", "bin", "codexlooper"));
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeTree(root);
   }
 });
