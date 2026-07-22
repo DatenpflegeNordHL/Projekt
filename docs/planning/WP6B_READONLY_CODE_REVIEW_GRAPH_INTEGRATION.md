@@ -1,17 +1,19 @@
 # WP6B Read-only Code Review Graph Integration
 
-Status: **BLOCKED UNTIL WP6A COMPLETES**
+Status: **READY FOR FINAL PLAN REVIEW — NOT EXECUTABLE**
 
-This is a design-stage plan and is intentionally stored outside `docs/plans/`.
-It must not be executed by CodexLooper until every WP6A completion gate in
-`docs/architecture/WP6A_LOOP_TRUST_HARDENING.md` passes and immutable Runtime A
-has been bootstrapped.
+WP6A Loop Trust Hardening and the authorised macOS Runtime A proof are complete.
+The original Code Review Graph v2.3.6 executable is installed and its local
+identity is recorded in:
+
+`docs/architecture/WP6B_CRG_LOCAL_INSTALL_PROOF.md`
+
+This specification intentionally remains outside `docs/plans/`. It must not be
+promoted or executed until explicit WP6B execution authorisation is given and a
+separate independent plan review reports no blocking finding.
 
 Controlling contract:
 `docs/architecture/CODEXLOOPER_LOOP_TRUST_INVARIANTS.md`
-
-After WP6A completion, promote an exact reviewed copy to a direct file under
-`docs/plans/` and commit that promotion before starting Runtime A.
 
 ## Goal
 
@@ -20,29 +22,50 @@ Graph advisory stage that improves Sol review targeting without weakening
 runtime immutability, branch authority, sandboxing, path policy, credential
 handling, receipts or independent review.
 
-A separate WP6C plan performs the first isolated live self-hosted CRG smoke after
-Runtime B is installed from the reviewed WP6B candidate.
+A separate WP6C plan performs the first isolated live self-hosted CRG smoke only
+after Runtime B is installed from the reviewed WP6B candidate.
+
+## Satisfied prerequisites
+
+- WP6A trust hardening: PASS.
+- Runtime A local proof on macOS arm64: PASS.
+- Local regression: 68 passed, 0 failed.
+- Original CRG package installed from exact release commit: PASS.
+- CRG version output: `code-review-graph 2.3.6`.
+- CRG command is a regular, executable, non-symlink file: PASS.
+- Model calls during installation proof: `0`.
+- CRG graph builds during installation proof: `0`.
+- `code-review-graph install` used: `false`.
+
+## Pinned upstream identity
+
+- repository: `tirth8205/code-review-graph`
+- version: `2.3.6`
+- release commit: `935695f800f2b02e71aae6d463f3df65f0c6493e`
+- local environment: `$HOME/.local/share/codexlooper/crg-2.3.6`
+- local command: `$HOME/.local/share/codexlooper/crg-2.3.6/bin/code-review-graph`
+- command SHA-256: `1c0e3e3ad5383069926583667f7c536e8111deddc793189e15d31f34e1d6d604`
+- dependency freeze SHA-256: `08f4a3b2a2265df20646078706006232f7d5137160949e0c5e7a4223faa950af`
+- Python used for the local installation proof: `3.14.6`
+
+The adapter must re-check the command path, canonical path, mode, executable
+identity, SHA-256 and exact version output during bootstrap and preflight. The
+proof values are evidence, not permission to skip runtime verification.
 
 ## Upstream source evidence
 
 The adapter contract is grounded in original Code Review Graph v2.3.6 source:
 
-- repository: `tirth8205/code-review-graph`;
-- version: `2.3.6`;
-- release commit: `935695f800f2b02e71aae6d463f3df65f0c6493e`;
 - `code_review_graph/__init__.py` declares `__version__ = "2.3.6"`;
-- `code_review_graph/cli.py` prints `code-review-graph <version>` for
-  `--version`;
+- `code_review_graph/cli.py` prints `code-review-graph <version>` for `--version`;
 - `build` accepts `--repo`, `--skip-flows` and `--data-dir`;
-- `detect-changes` accepts `--base` and `--repo`, does not accept
-  `--data-dir`, and prints full JSON when changes exist and `--brief` is absent;
+- `detect-changes` accepts `--base` and `--repo`, does not accept `--data-dir`,
+  and prints full JSON when changes exist and `--brief` is absent;
 - `detect-changes` prints the exact text `No changes detected.` when no changed
   files exist;
 - `CRG_REPO_ROOT` controls repository resolution;
 - `CRG_DATA_DIR` controls graph storage and contains `graph.db`.
 
-Install the exact original package through an isolated human-owned environment.
-Never invoke the separate `code-review-graph install` integration subcommand.
 Do not copy CRG implementation source into CodexLooper.
 
 ## Pinned CLI contract
@@ -149,7 +172,7 @@ source and tests.
 
 ## Runtime and branch prerequisites
 
-Runtime A must already enforce:
+Runtime A already enforces:
 
 - immutable content-addressed runtime files and manifest verification;
 - branch equality before every host mutation and at finalization;
@@ -188,6 +211,7 @@ The configured CRG path must be:
 - non-symlink;
 - executable by the current user;
 - unchanged from bootstrap/preflight identity;
+- SHA-256 exact when a pinned local identity is configured;
 - version-exact.
 
 Every directory from project root through the run directory and CRG data paths
@@ -207,8 +231,7 @@ directory.
 
 ## Candidate allowed paths
 
-The promoted executable plan may allow only the minimum necessary paths,
-including:
+The promoted executable plan may allow only the minimum necessary paths:
 
 - `package.json`;
 - `src/code-review-graph.mjs`;
@@ -251,7 +274,7 @@ behavior. Do not modify Sol integration in this task.
 
 ### Task 3: Fail-open Sol advisory integration
 
-Build/reuse the graph by exact cache key, run detect, create the strict bounded
+Build or reuse the graph by exact cache key, run detect, create the strict bounded
 projection and append only that projection to the immutable Runtime A Sol review
 prompt. Preserve the normal independent review for every valid CRG runtime
 failure. Update focused tests and documentation.
@@ -273,6 +296,7 @@ Focused tests must include:
 - disabled mode;
 - exact version success and mismatch;
 - relative, nonexistent, non-executable and symlink command rejection;
+- command SHA-256 identity success and mismatch;
 - private-path and symlink containment rejection;
 - version/build/detect timeout;
 - non-zero exit;
@@ -286,6 +310,19 @@ Focused tests must include:
 - fail-open Sol continuity;
 - no remaining CRG process;
 - unchanged behavior when CRG is omitted.
+
+## Promotion gate
+
+Promotion into `docs/plans/` requires all of the following:
+
+- explicit authorisation to prepare and execute WP6B;
+- independent review of this exact planning file;
+- no blocking plan finding;
+- current PR head has green CI;
+- Runtime A evidence remains valid;
+- CRG local install identity still matches the proof;
+- promoted copy is exact except for status, executable path-policy metadata and
+  task checkboxes required by the plan parser.
 
 ## Completion gate
 
@@ -301,4 +338,5 @@ WP6B completes only when:
 
 Only then may WP6C perform the isolated live CRG smoke.
 
-No push, merge, release or target-product action is authorised by this plan.
+No push, merge, release, target-product action or model spending is authorised by
+this planning document alone.
