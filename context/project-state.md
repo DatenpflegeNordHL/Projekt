@@ -12,12 +12,13 @@
 - Rejected Terra builder patches are retained privately for diagnostics.
 - The current complete local regression result is 68 tests passed, 0 failed.
 - WP6A Loop Trust Hardening is complete.
+- The original CRG v2.3.6 executable is installed and locally proven without graph or model execution.
 
 ## Core CLI status
 
 - WP1 through WP5 are complete; see `docs/ROADMAP.md` for accepted evidence.
 - One tracked direct Markdown plan under `docs/plans/` is accepted per run.
-- Design-stage and blocked plans remain outside `docs/plans/`.
+- Design-stage, review-stage and blocked plans remain outside `docs/plans/`.
 - The generated `codexlooper` command performs preflight and starts Ralphex.
 - Codex `turn.completed` events are recorded as secret-free usage telemetry.
 - Terra and Sol usage is separated and priced from the verified CloseRouter snapshot.
@@ -26,9 +27,9 @@
 
 ## WP6A completed trust root
 
-The active runtime is now content-addressed, copied outside the mutable source path for the run, sealed read-only and verified by SHA-256 manifest before model calls and host mutation boundaries.
+The active runtime is content-addressed, copied outside the mutable source path for the run, sealed read-only and verified by SHA-256 manifest before model calls and host mutation boundaries.
 
-The runner now enforces:
+The runner enforces:
 
 - exact repository-root and branch authority;
 - monotonic ancestry from the run-start SHA;
@@ -61,39 +62,57 @@ The authorised macOS Runtime A proof is recorded in:
 - paid model calls: 0;
 - CRG builds: 0.
 
+## CRG local install proof
+
+Evidence is recorded in:
+`docs/architecture/WP6B_CRG_LOCAL_INSTALL_PROOF.md`
+
+- original repository: `tirth8205/code-review-graph`;
+- approved version: `2.3.6`;
+- release commit: `935695f800f2b02e71aae6d463f3df65f0c6493e`;
+- isolated environment: `$HOME/.local/share/codexlooper/crg-2.3.6`;
+- exact CLI output: `code-review-graph 2.3.6`;
+- command SHA-256: `1c0e3e3ad5383069926583667f7c536e8111deddc793189e15d31f34e1d6d604`;
+- dependency freeze SHA-256: `08f4a3b2a2265df20646078706006232f7d5137160949e0c5e7a4223faa950af`;
+- command regular, executable and non-symlink: PASS;
+- graph builds: 0;
+- model calls: 0;
+- separate `code-review-graph install` subcommand used: false.
+
 ## Fixed next sequence
 
-1. **WP6B Read-only CRG Integration**
-   - specification remains at
+1. **WP6B final plan review**
+   - canonical specification remains at
      `docs/planning/WP6B_READONLY_CODE_REVIEW_GRAPH_INTEGRATION.md`;
-   - WP6A prerequisites are now satisfied;
-   - install the original CRG v2.3.6 executable in an isolated environment;
-   - review and promote an exact bounded copy to `docs/plans/` only under explicit execution authorisation;
-   - execute with immutable Runtime A;
-   - keep CRG advisory-only and fail-open toward the independent Sol review.
-2. **WP6C Isolated Live CRG Smoke**
-   - bootstrap Runtime B from the reviewed WP6B candidate;
+   - WP6A and original-executable prerequisites are satisfied;
+   - perform an independent review of the exact planning file;
+   - keep the plan non-executable until explicit WP6B execution authorisation.
+2. **WP6B implementation under Runtime A**
+   - after explicit authorisation, promote the reviewed bounded copy to `docs/plans/`;
+   - implement the standalone adapter, original executable plumbing and advisory-only Sol integration;
+   - keep CRG fail-open toward the independent Sol review;
+   - pass focused tests, repository-wide tests, CI and independent diff review;
+   - bootstrap Runtime B from the reviewed candidate.
+3. **WP6C isolated live CRG smoke**
    - prove success, no-change, fail-open, branch-lock, runtime-tamper and secret-leak cases in a fixture repository.
-3. Obtain explicit merge authorisation, merge, then bootstrap Runtime C from `main`.
+4. Obtain explicit merge authorisation, merge, then bootstrap Runtime C from `main`.
 
 No step may be skipped or reordered because a later test passes.
 
 ## CRG baseline
 
-- original repository: `tirth8205/code-review-graph`;
-- approved version: `2.3.6`;
-- release commit: `935695f800f2b02e71aae6d463f3df65f0c6493e`;
-- install the original package in an isolated environment;
 - never run the separate `code-review-graph install` integration subcommand;
 - never expose CRG MCP or write-capable tools to Terra or Sol;
-- never pass raw CRG output directly into the Sol prompt.
+- never pass raw CRG output directly into the Sol prompt;
+- re-check command path, SHA-256 and exact version during bootstrap and preflight;
+- keep graph data private to one run;
+- no real CRG graph build before WP6C.
 
 ## Remaining external setup
 
 - Rename the GitHub repository from `Projekt` to `codexlooper` when convenient.
-- Install the exact original CRG v2.3.6 executable before WP6B promotion.
-- Store the local CloseRouter credential securely before a local paid model run.
+- Store the local CloseRouter credential securely before an authorised paid model run.
 
 ## Next use gate
 
-WP6A is complete. WP6B may now be prepared from the reviewed planning specification, but it must remain non-executable until explicit authorisation is given to promote and run it. PR 7 remains Draft and must not be merged or released without separate authorisation.
+WP6A and the original CRG installation prerequisite are complete. The immediate next action is independent review of the exact WP6B planning specification. Promotion into `docs/plans/`, Runtime A execution, model spending, CRG graph building, PR merge and release remain blocked until their stated authorisation gates are satisfied.
