@@ -2,16 +2,18 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
-  rmSync,
+  realpathSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { install } from "../scripts/install.mjs";
+import { removeTree } from "./helpers/remove-tree.mjs";
 
 function run(command, args, cwd) {
   const result = spawnSync(command, args, { cwd, encoding: "utf8" });
@@ -35,7 +37,10 @@ test("installer pins the exact project as Codex workspace writable root", () => 
     join(tools, "codex"),
     "#!/bin/sh\nif [ \"${1:-}\" = \"--version\" ]; then echo 'codex-cli 0.144.6'; exit 0; fi\nexit 0\n",
   );
-  const mex = executable(join(tools, "mex"), "#!/bin/sh\nexit 0\n");
+  const mex = executable(
+    join(tools, "mex"),
+    "#!/bin/sh\nif [ \"${1:-}\" = \"--version\" ]; then echo 'mex 0.6.3'; exit 0; fi\nif [ \"${1:-}\" = \"check\" ] && [ \"${2:-}\" = \"--json\" ]; then echo '{\"score\":100}'; exit 0; fi\nexit 0\n",
+  );
   const ralphex = executable(
     join(tools, "ralphex"),
     "#!/bin/sh\nif [ \"${1:-}\" = \"--version\" ]; then echo 'ralphex 1.6.0'; exit 0; fi\nexit 0\n",
@@ -43,8 +48,12 @@ test("installer pins the exact project as Codex workspace writable root", () => 
 
   try {
     run("/usr/bin/git", ["init", "-b", "main"], project);
+    run("/usr/bin/git", ["config", "user.name", "Installer Fixture"], project);
+    run("/usr/bin/git", ["config", "user.email", "fixture@example.invalid"], project);
     writeFileSync(join(project, "AGENTS.md"), "# Agent\n");
     writeFileSync(join(project, "ROUTER.md"), "# Router\n");
+    run("/usr/bin/git", ["add", "."], project);
+    run("/usr/bin/git", ["commit", "-m", "chore: initialize fixture"], project);
 
     const result = install([
       "--project",
@@ -57,17 +66,29 @@ test("installer pins the exact project as Codex workspace writable root", () => 
       ralphex,
     ]);
 
+    const canonicalProject = realpathSync(project);
     const config = readFileSync(join(project, ".codexlooper", "codex-home", "config.toml"), "utf8");
     assert.match(config, /\[sandbox_workspace_write\]/);
     assert.match(config, /writable_roots = \[/);
-    assert.ok(config.includes(JSON.stringify(project)));
+    assert.ok(config.includes(JSON.stringify(canonicalProject)));
 
     const state = JSON.parse(
       readFileSync(join(project, ".codexlooper", "install-state.json"), "utf8"),
     );
-    assert.equal(state.writable_root, project);
-    assert.equal(result.runCommand, join(project, ".codexlooper", "bin", "codexlooper"));
+    assert.equal(state.writable_root, canonicalProject);
+    assert.equal(state.runtime.id, result.runtimeId);
+    assert.equal(state.budgets.max_builder_calls, 12);
+    assert.deepEqual(state.branch_policy, {
+      mode: "lock-current-branch-at-run-start",
+      repository_root: "exact",
+      detached_head: "reject",
+      ancestry: "run-start-sha-must-remain-ancestor",
+      ralphex_branch_mutation: "reject",
+    });
+    assert.deepEqual(result.branchPolicy, state.branch_policy);
+    assert.ok(existsSync(state.runtime.manifest));
+    assert.equal(result.runCommand, join(canonicalProject, ".codexlooper", "bin", "codexlooper"));
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeTree(root);
   }
 });

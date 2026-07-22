@@ -43,7 +43,8 @@ function validateWorkspaceSnapshot(sourceEnv, projectRoot) {
   }
   const snapshot = realpathSync(configuredSnapshot);
   const project = realpathSync(projectRoot);
-  const snapshotsRoot = resolve(runDirectory, "snapshots");
+  const canonicalRunDirectory = realpathSync(runDirectory);
+  const snapshotsRoot = resolve(canonicalRunDirectory, "snapshots");
   const rel = relative(snapshotsRoot, snapshot);
   if (snapshot !== project || !rel || rel.startsWith("..") || isAbsolute(rel)) {
     fail("CODEXLOOPER_SNAPSHOT_REQUIRED", "workspace-write may target only the current isolated snapshot");

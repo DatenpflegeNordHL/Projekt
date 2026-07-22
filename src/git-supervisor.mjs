@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { assertGitAuthorityFromEnvironment } from "./git-authority.mjs";
 import { pathAllowed } from "./run-policy.mjs";
 
 const SAFE_ENV_KEYS = [
@@ -59,6 +60,10 @@ function safeEnvironment(sourceEnv = process.env) {
   }
   env.DO_NOT_TRACK = "1";
   return env;
+}
+
+function authority(root, sourceEnv, label) {
+  return assertGitAuthorityFromEnvironment({ projectRoot: root, sourceEnv, label });
 }
 
 function run(command, args, { cwd, env, label, timeout, input } = {}) {
@@ -157,13 +162,15 @@ function validatePaths(paths, rules) {
 function runValidationCommands(projectRoot, commands, sourceEnv) {
   const results = [];
   for (const command of commands) {
+    authority(projectRoot, sourceEnv, `Before validation command ${JSON.stringify(command)}`);
     const started = Date.now();
-    run("/bin/sh", ["-lc", command], {
+    run("/bin/sh", ["-c", command], {
       cwd: projectRoot,
       env: safeEnvironment(sourceEnv),
       label: `Validation command ${JSON.stringify(command)}`,
       timeout: VALIDATION_TIMEOUT_MS,
     });
+    authority(projectRoot, sourceEnv, `After validation command ${JSON.stringify(command)}`);
     results.push({ command, duration_ms: Math.max(0, Date.now() - started), status: "PASS" });
   }
   return results;
@@ -176,17 +183,18 @@ function recordEvent(policyPath, event) {
 }
 
 function commitPaths({ root, paths, policy, policyPath, phase, sourceEnv, now, transport }) {
+  authority(root, sourceEnv, "Before host validation");
   const validation = runValidationCommands(root, policy.validation_commands, sourceEnv);
+  authority(root, sourceEnv, "Before host staging");
   run("/usr/bin/git", ["add", "--all", "--", ...paths], {
     cwd: root,
     env: safeEnvironment(sourceEnv),
     label: "Host git add",
   });
   const staged = gitPaths(root, ["diff", "--cached", "--name-only", "-z"]);
-  if (staged.length === 0) {
-    fail("CODEXLOOPER_HOST_COMMIT_EMPTY", "Builder changes produced no staged files");
-  }
+  if (staged.length === 0) fail("CODEXLOOPER_HOST_COMMIT_EMPTY", "Builder changes produced no staged files");
   validatePaths(staged, policy.allowed_paths);
+  authority(root, sourceEnv, "Before host commit");
   const message =
     phase === "task"
       ? "feat: complete CodexLooper task iteration"
@@ -196,13 +204,14 @@ function commitPaths({ root, paths, policy, policyPath, phase, sourceEnv, now, t
     env: safeEnvironment(sourceEnv),
     label: "Host git commit",
   });
+  authority(root, sourceEnv, "After host commit");
   const commit = run("/usr/bin/git", ["rev-parse", "HEAD"], {
     cwd: root,
     env: safeEnvironment(sourceEnv),
     label: "Host commit lookup",
   });
   recordEvent(policyPath, {
-    schema: "codexlooper.host-commit.v2",
+    schema: "codexlooper.host-commit.v3",
     created_at: now().toISOString(),
     run_id: sourceEnv.CODEXLOOPER_RUN_ID || null,
     phase,
@@ -210,14 +219,14 @@ function commitPaths({ root, paths, policy, policyPath, phase, sourceEnv, now, t
     commit,
     changed_paths: staged,
     validation,
+    branch: sourceEnv.CODEXLOOPER_EXPECTED_BRANCH || null,
+    run_start_sha: sourceEnv.CODEXLOOPER_RUN_START_SHA || null,
   });
   return { committed: true, commit, changed_paths: staged, validation };
 }
 
 function normalizePatch(patch) {
-  if (typeof patch !== "string") {
-    fail("CODEXLOOPER_PATCH_INVALID", "Builder patch must be a string");
-  }
+  if (typeof patch !== "string") fail("CODEXLOOPER_PATCH_INVALID", "Builder patch must be a string");
   if (Buffer.byteLength(patch, "utf8") > MAX_PATCH_BYTES || patch.includes("\0")) {
     fail("CODEXLOOPER_PATCH_INVALID", "Builder patch is invalid or too large");
   }
@@ -264,6 +273,7 @@ function samePaths(left, right) {
 }
 
 function cleanupAppliedPatch(root, paths, sourceEnv) {
+  authority(root, sourceEnv, "Before host patch rollback");
   run("/usr/bin/git", ["reset", "--hard", "HEAD"], {
     cwd: root,
     env: safeEnvironment(sourceEnv),
@@ -276,6 +286,7 @@ function cleanupAppliedPatch(root, paths, sourceEnv) {
       label: "Host untracked patch rollback",
     });
   }
+  authority(root, sourceEnv, "After host patch rollback");
 }
 
 export function applyBuilderPatch({
@@ -289,16 +300,16 @@ export function applyBuilderPatch({
     fail("CODEXLOOPER_SUPERVISOR_PHASE_INVALID", "Supervisor phase must be task or review");
   }
   const root = realpathSync(projectRoot);
+  authority(root, sourceEnv, "Before structured patch inspection");
   if (changedPaths(root).length > 0) {
     fail("CODEXLOOPER_PATCH_DIRTY", "Host patch application requires a clean worktree");
   }
   const normalizedPatch = normalizePatch(patch);
-  if (!normalizedPatch) {
-    return { committed: false, changed_paths: [], validation: [] };
-  }
+  if (!normalizedPatch) return { committed: false, changed_paths: [], validation: [] };
   const { policy, policyPath } = loadPolicy(sourceEnv, root);
   const declared = declaredPatchPaths(normalizedPatch);
   validatePaths(declared, policy.allowed_paths);
+  authority(root, sourceEnv, "Before structured patch check");
   run("/usr/bin/git", ["apply", "--check", "--recount", "--whitespace=error-all", "-"], {
     cwd: root,
     env: safeEnvironment(sourceEnv),
@@ -307,6 +318,7 @@ export function applyBuilderPatch({
   });
   let applied = false;
   try {
+    authority(root, sourceEnv, "Before structured patch apply");
     run("/usr/bin/git", ["apply", "--recount", "--whitespace=error-all", "-"], {
       cwd: root,
       env: safeEnvironment(sourceEnv),
@@ -314,6 +326,7 @@ export function applyBuilderPatch({
       input: normalizedPatch,
     });
     applied = true;
+    authority(root, sourceEnv, "After structured patch apply");
     const actual = changedPaths(root);
     if (!samePaths(actual, declared)) {
       fail(
@@ -348,10 +361,9 @@ export function superviseBuilderChanges({
     fail("CODEXLOOPER_SUPERVISOR_PHASE_INVALID", "Supervisor phase must be task or review");
   }
   const root = realpathSync(projectRoot);
+  authority(root, sourceEnv, "Before legacy worktree supervision");
   const paths = changedPaths(root);
-  if (paths.length === 0) {
-    return { committed: false, changed_paths: [], validation: [] };
-  }
+  if (paths.length === 0) return { committed: false, changed_paths: [], validation: [] };
   const { policy, policyPath } = loadPolicy(sourceEnv, root);
   validatePaths(paths, policy.allowed_paths);
   return commitPaths({

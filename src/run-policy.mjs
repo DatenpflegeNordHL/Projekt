@@ -3,6 +3,8 @@ import { isAbsolute, posix } from "node:path";
 const MAX_RULES = 64;
 const MAX_COMMANDS = 12;
 const MAX_COMMAND_LENGTH = 1000;
+const VALIDATION_PATH = /^[A-Za-z0-9._@+\/-]+$/;
+const TEST_OPERATORS = new Set(["-d", "-e", "-f", "-s"]);
 
 function fail(code, message) {
   const error = new Error(message);
@@ -81,6 +83,82 @@ function uniqueRules(rules) {
   });
 }
 
+function validationPath(value, rules, label) {
+  if (
+    typeof value !== "string" ||
+    !VALIDATION_PATH.test(value) ||
+    value.startsWith("/") ||
+    value.startsWith("-") ||
+    value.split("/").includes("..")
+  ) {
+    fail("CODEXLOOPER_POLICY_COMMAND_REJECTED", `${label} uses an unsafe repository path`);
+  }
+  const normalized = posix.normalize(value.replace(/^\.\//, ""));
+  if (!pathAllowed(normalized, rules)) {
+    fail(
+      "CODEXLOOPER_POLICY_COMMAND_REJECTED",
+      `${label} may inspect only paths declared by the plan: ${normalized}`,
+    );
+  }
+  return normalized;
+}
+
+function commandTokens(command) {
+  if (
+    typeof command !== "string" ||
+    !command ||
+    command.length > MAX_COMMAND_LENGTH ||
+    command.includes("\0") ||
+    command.includes("\n") ||
+    command.includes("\r")
+  ) {
+    fail("CODEXLOOPER_POLICY_COMMAND_INVALID", "Validation command is invalid or too long");
+  }
+  if (/[;&|<>`$(){}\[\]"'\\]/.test(command)) {
+    fail(
+      "CODEXLOOPER_POLICY_COMMAND_REJECTED",
+      `Validation command contains shell syntax or quoting: ${command}`,
+    );
+  }
+  const tokens = command.trim().split(/\s+/);
+  if (tokens.some((token) => !token)) {
+    fail("CODEXLOOPER_POLICY_COMMAND_REJECTED", `Validation command is malformed: ${command}`);
+  }
+  return tokens;
+}
+
+export function validationInvocation(command, rules) {
+  const tokens = commandTokens(command);
+
+  if (tokens.length === 3 && tokens[0] === "git" && tokens[1] === "diff" && tokens[2] === "--check") {
+    return { executable: "/usr/bin/git", args: ["diff", "--check"], display: command };
+  }
+
+  if (tokens.length === 3 && tokens[0] === "node" && tokens[1] === "--check") {
+    const path = validationPath(tokens[2], rules, "node --check");
+    if (!/\.(?:cjs|js|mjs)$/.test(path)) {
+      fail("CODEXLOOPER_POLICY_COMMAND_REJECTED", "node --check accepts only JavaScript source files");
+    }
+    return { executable: process.execPath, args: ["--check", path], display: command };
+  }
+
+  if (tokens[0] === "test") {
+    if (tokens.length === 3 && TEST_OPERATORS.has(tokens[1])) {
+      const path = validationPath(tokens[2], rules, "test");
+      return { executable: "/usr/bin/test", args: [tokens[1], path], display: command };
+    }
+    if (tokens.length === 4 && tokens[1] === "!" && tokens[2] === "-e") {
+      const path = validationPath(tokens[3], rules, "test ! -e");
+      return { executable: "/usr/bin/test", args: ["!", "-e", path], display: command };
+    }
+  }
+
+  fail(
+    "CODEXLOOPER_POLICY_COMMAND_REJECTED",
+    `Validation command is not allowlisted: ${command}`,
+  );
+}
+
 export function parseRunPolicy(planRelative, content) {
   if (typeof planRelative !== "string" || !planRelative || typeof content !== "string") {
     fail("CODEXLOOPER_POLICY_INVALID", "Plan path and content are required");
@@ -104,17 +182,7 @@ export function parseRunPolicy(planRelative, content) {
   if (commands.length > MAX_COMMANDS) {
     fail("CODEXLOOPER_POLICY_INVALID", `Plan exceeds ${MAX_COMMANDS} validation commands`);
   }
-  for (const command of commands) {
-    if (
-      !command ||
-      command.length > MAX_COMMAND_LENGTH ||
-      command.includes("\0") ||
-      command.includes("\n") ||
-      command.includes("\r")
-    ) {
-      fail("CODEXLOOPER_POLICY_COMMAND_INVALID", "Validation command is invalid or too long");
-    }
-  }
+  for (const command of commands) validationInvocation(command, allowedPaths);
 
   return {
     schema: "codexlooper.run-policy.v1",
