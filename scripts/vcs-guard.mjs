@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { assertGitAuthorityFromEnvironment } from "../src/git-authority.mjs";
+import { verifyRuntimeManifest } from "../src/runtime-integrity.mjs";
 
 function fail(message) {
   throw new Error(message);
@@ -56,6 +57,12 @@ function mutationBlocked(args) {
 }
 
 try {
+  verifyRuntimeManifest({
+    manifestPath: process.env.CODEXLOOPER_RUNTIME_MANIFEST,
+    expectedManifestSha256: process.env.CODEXLOOPER_RUNTIME_MANIFEST_SHA256,
+    expectedRuntimeDirectory: process.env.CODEXLOOPER_RUNTIME_DIR,
+    expectedNodeExecutable: process.execPath,
+  });
   const project = currentProject();
   const args = process.argv.slice(2);
   if (args.length === 0) fail("Git arguments are required");
@@ -93,6 +100,6 @@ try {
     });
   }
 } catch (error) {
-  process.stderr.write(`CODEXLOOPER_VCS_BLOCK: ${error.message}\n`);
+  process.stderr.write(`CODEXLOOPER_VCS_BLOCK: ${error.code || "CODEXLOOPER_VCS_FAILED"}: ${error.message}\n`);
   process.exitCode = 1;
 }
