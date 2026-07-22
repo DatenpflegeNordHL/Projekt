@@ -6,11 +6,12 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 
 function fail(code, message) {
   const error = new Error(message);
@@ -48,12 +49,19 @@ function positiveInteger(value, label) {
   return parsed;
 }
 
+function canonicalExistingOrProspective(path) {
+  if (existsSync(path)) return realpathSync(path);
+  const parent = realpathSync(dirname(path));
+  return resolve(parent, basename(path));
+}
+
 function requirePrivateRunPath(path, projectRoot, label) {
   if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0")) {
     fail("CODEXLOOPER_BUDGET_INVALID", `${label} must be an absolute path`);
   }
-  const root = resolve(projectRoot, ".codexlooper", "runs");
-  const target = resolve(path);
+  const project = realpathSync(projectRoot);
+  const root = resolve(project, ".codexlooper", "runs");
+  const target = canonicalExistingOrProspective(resolve(path));
   const rel = relative(root, target);
   if (!rel || rel.startsWith("..") || isAbsolute(rel)) {
     fail("CODEXLOOPER_BUDGET_INVALID", `${label} must stay inside .codexlooper/runs`);
