@@ -40,7 +40,7 @@ setInterval(() => {}, 1000);
           cwd: root,
           env: process.env,
           stdio: "ignore",
-          timeoutMs: 50,
+          timeoutMs: 250,
           killGraceMs: 50,
           label: "Stubborn fixture",
         }),
