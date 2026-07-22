@@ -4,8 +4,8 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
-  readdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -100,7 +100,11 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeCodexSource)} "$@"
   );
   const mex = executable(
     join(tools, "mex"),
-    "#!/bin/sh\nif [ \"${1:-}\" = \"check\" ] && [ \"${2:-}\" = \"--json\" ]; then echo '{\"score\":100}'; exit 0; fi\nexit 2\n",
+    `#!/bin/sh
+if [ "\${1:-}" = "--version" ]; then echo 'mex 0.6.3'; exit 0; fi
+if [ "\${1:-}" = "check" ] && [ "\${2:-}" = "--json" ]; then echo '{"score":100}'; exit 0; fi
+exit 2
+`,
   );
 
   run("/usr/bin/git", ["-C", project, "add", "."]);
@@ -132,6 +136,11 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeCodexSource)} "$@"
   assert.match(result.stdout + result.stderr, /CODEXLOOPER_RUN=PASS/);
   assert.equal(readFileSync(join(project, "result.txt"), "utf8"), "fixture-pass\n");
   assert.ok(existsSync(join(project, "docs", "plans", "completed", "fixture.md")));
+  assert.equal(existsSync(join(project, "docs", "plans", "fixture.md")), false);
+  assert.equal(
+    run("/usr/bin/git", ["-C", project, "branch", "--show-current"]).stdout.trim(),
+    "main",
+  );
 
   const runEntries = readdirSync(join(project, ".codexlooper", "runs"), { withFileTypes: true }).filter(
     (entry) => entry.isDirectory(),
@@ -139,13 +148,23 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeCodexSource)} "$@"
   assert.equal(runEntries.length, 1);
   const runDirectory = join(project, ".codexlooper", "runs", runEntries[0].name);
   const receipt = JSON.parse(readFileSync(join(runDirectory, "receipt.json"), "utf8"));
+  assert.equal(receipt.schema, "codexlooper.run.v2");
   assert.equal(receipt.status, "completed");
-  assert.ok(receipt.commits_created >= 1);
+  assert.equal(receipt.branch_before, "main");
+  assert.equal(receipt.branch_after, "main");
+  assert.equal(receipt.ancestry_ok, true);
+  assert.equal(receipt.checks.runtime_integrity, true);
+  assert.equal(receipt.checks.branch_locked, true);
+  assert.equal(receipt.checks.ancestry_monotonic, true);
+  assert.ok(receipt.commits_created >= 2);
+  assert.equal(receipt.budgets.state.attempts.builder, 1);
+  assert.equal(receipt.budgets.state.attempts.reviewer, 1);
   assert.ok(receipt.usage.profiles.builder.calls >= 1);
   assert.ok(receipt.usage.profiles.reviewer.calls >= 1);
   assert.ok(receipt.usage.totals.estimated_cost_usd > 0);
   const hostEvents = readFileSync(join(runDirectory, "host-commits.jsonl"), "utf8");
   assert.match(hostEvents, /"transport":"structured_patch"/);
+  assert.match(hostEvents, /"transport":"host_plan_archive"/);
   assert.equal(existsSync(join(runDirectory, "snapshots")), true);
   assert.deepEqual(readdirSync(join(runDirectory, "snapshots")), []);
   assert.doesNotMatch(JSON.stringify(receipt), /closerouter_fixture_secret|GITHUB_TOKEN/);
