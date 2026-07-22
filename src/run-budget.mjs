@@ -26,6 +26,14 @@ function finitePositive(value, label) {
   return parsed;
 }
 
+function finiteNonNegative(value, label) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    fail("CODEXLOOPER_BUDGET_INVALID", `${label} must be a non-negative number`);
+  }
+  return parsed;
+}
+
 function nonNegativeInteger(value, label) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 0) {
@@ -81,7 +89,9 @@ function parseState(path) {
     !state.limits ||
     !state.attempts ||
     typeof state.started_at_ms !== "number" ||
-    typeof state.deadline_at_ms !== "number"
+    typeof state.deadline_at_ms !== "number" ||
+    typeof state.reserved_cost_usd !== "number" ||
+    typeof state.actual_estimated_cost_usd !== "number"
   ) {
     fail("CODEXLOOPER_BUDGET_INVALID", "Run budget state schema is invalid");
   }
@@ -102,6 +112,14 @@ function lock(path) {
       rmSync(path, { force: true });
     }
   };
+}
+
+function configuredBudgetPath(sourceEnv, projectRoot) {
+  const configured = sourceEnv.CODEXLOOPER_BUDGET_PATH;
+  if (!configured) {
+    fail("CODEXLOOPER_BUDGET_REQUIRED", "A private run budget is required before a paid model call");
+  }
+  return requirePrivateRunPath(configured, projectRoot, "Run budget path");
 }
 
 export function parseBudgetLimits(sourceEnv = process.env) {
@@ -149,6 +167,7 @@ export function initializeRunBudget({
     limits,
     attempts: { builder: 0, reviewer: 0 },
     reserved_cost_usd: 0,
+    actual_estimated_cost_usd: 0,
     crg_builds: 0,
   };
   writeAtomic(statePath, state);
@@ -175,9 +194,7 @@ export function reserveModelCall(profile, {
   if (profile !== "builder" && profile !== "reviewer") {
     fail("CODEXLOOPER_BUDGET_INVALID", `Unknown model profile: ${profile}`);
   }
-  const configured = sourceEnv.CODEXLOOPER_BUDGET_PATH;
-  if (!configured) return null;
-  const budgetPath = requirePrivateRunPath(configured, projectRoot, "Run budget path");
+  const budgetPath = configuredBudgetPath(sourceEnv, projectRoot);
   const release = lock(`${budgetPath}.lock`);
   try {
     const state = readRunBudget({ budgetPath, projectRoot });
@@ -189,8 +206,12 @@ export function reserveModelCall(profile, {
     if (state.attempts[profile] + 1 > state.limits[key]) {
       fail("CODEXLOOPER_BUDGET_CALLS_EXCEEDED", `${profile} call budget is exhausted`);
     }
+    const currentCostBasis = Math.max(
+      state.reserved_cost_usd,
+      state.actual_estimated_cost_usd,
+    );
     const nextReserved = Number(
-      (state.reserved_cost_usd + state.limits.model_call_reserve_usd).toFixed(9),
+      (currentCostBasis + state.limits.model_call_reserve_usd).toFixed(9),
     );
     if (nextReserved > state.limits.max_estimated_cost_usd) {
       fail("CODEXLOOPER_BUDGET_COST_EXCEEDED", "Estimated CloseRouter cost budget is exhausted");
@@ -202,8 +223,32 @@ export function reserveModelCall(profile, {
       profile,
       attempt: state.attempts[profile],
       reserved_cost_usd: state.reserved_cost_usd,
+      actual_estimated_cost_usd: state.actual_estimated_cost_usd,
       deadline_at_ms: state.deadline_at_ms,
     };
+  } finally {
+    release();
+  }
+}
+
+export function recordActualEstimatedCost(costUsd, {
+  sourceEnv = process.env,
+  projectRoot = process.cwd(),
+} = {}) {
+  const actual = finiteNonNegative(costUsd, "Actual estimated cost");
+  const budgetPath = configuredBudgetPath(sourceEnv, projectRoot);
+  const release = lock(`${budgetPath}.lock`);
+  try {
+    const state = readRunBudget({ budgetPath, projectRoot });
+    if (actual < state.actual_estimated_cost_usd) {
+      fail("CODEXLOOPER_BUDGET_INVALID", "Actual estimated cost must be monotonic");
+    }
+    state.actual_estimated_cost_usd = Number(actual.toFixed(9));
+    writeAtomic(budgetPath, state);
+    if (state.actual_estimated_cost_usd > state.limits.max_estimated_cost_usd) {
+      fail("CODEXLOOPER_BUDGET_COST_EXCEEDED", "Actual estimated CloseRouter cost exceeded the run budget");
+    }
+    return state;
   } finally {
     release();
   }
