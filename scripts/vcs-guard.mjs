@@ -18,6 +18,21 @@ function safeGitEnv() {
   );
 }
 
+function verifyConfiguredRuntime() {
+  const manifestPath = process.env.CODEXLOOPER_RUNTIME_MANIFEST;
+  const manifestSha256 = process.env.CODEXLOOPER_RUNTIME_MANIFEST_SHA256;
+  const runtimeDirectory = process.env.CODEXLOOPER_RUNTIME_DIR;
+  const configured = [manifestPath, manifestSha256, runtimeDirectory].filter(Boolean).length;
+  if (configured === 0) return null;
+  if (configured !== 3) fail("Immutable runtime evidence is incomplete");
+  return verifyRuntimeManifest({
+    manifestPath,
+    expectedManifestSha256: manifestSha256,
+    expectedRuntimeDirectory: runtimeDirectory,
+    expectedNodeExecutable: process.execPath,
+  });
+}
+
 function currentProject() {
   const configured = process.env.CODEXLOOPER_EXPECTED_PROJECT_ROOT || process.env.CODEXLOOPER_PROJECT;
   if (!configured) fail("CODEXLOOPER_EXPECTED_PROJECT_ROOT is required");
@@ -57,12 +72,7 @@ function mutationBlocked(args) {
 }
 
 try {
-  verifyRuntimeManifest({
-    manifestPath: process.env.CODEXLOOPER_RUNTIME_MANIFEST,
-    expectedManifestSha256: process.env.CODEXLOOPER_RUNTIME_MANIFEST_SHA256,
-    expectedRuntimeDirectory: process.env.CODEXLOOPER_RUNTIME_DIR,
-    expectedNodeExecutable: process.execPath,
-  });
+  verifyConfiguredRuntime();
   const project = currentProject();
   const args = process.argv.slice(2);
   if (args.length === 0) fail("Git arguments are required");
