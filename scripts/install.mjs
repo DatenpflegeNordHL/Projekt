@@ -1,18 +1,19 @@
 import {
   chmodSync,
-  mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   canonicalExecutable,
   installImmutableRuntime,
 } from "../src/runtime-integrity.mjs";
+import { ensurePrivateDirectoryChain } from "../src/runtime-paths.mjs";
 
 const THIS_FILE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(THIS_FILE), "..");
@@ -173,10 +174,12 @@ function tomlString(value) {
 }
 
 function writeAtomic(path, content, mode = 0o600) {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.tmp-${process.pid}`;
+  const parent = realpathSync(dirname(path));
+  const canonicalTarget = resolve(parent, basename(path));
+  if (canonicalTarget !== path) fail(`Unsafe write path: ${path}`);
+  const temporary = resolve(parent, `.${basename(path)}.tmp-${process.pid}-${Date.now()}`);
   try {
-    writeFileSync(temporary, content, { encoding: "utf8", mode });
+    writeFileSync(temporary, content, { encoding: "utf8", mode, flag: "wx" });
     chmodSync(temporary, mode);
     renameSync(temporary, path);
   } finally {
@@ -255,7 +258,7 @@ function vcsWrapperScript({ project, runtime, budgets }) {
 
 export function install(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
-  const project = resolve(args["--project"]);
+  const project = realpathSync(resolve(args["--project"]));
   const realCodex = canonicalExecutable(args["--real-codex"], "Codex command").path;
   const mexCommand = canonicalExecutable(args["--mex-command"], "MEX command").path;
   const ralphexCommand = canonicalExecutable(args["--ralphex-command"], "Ralphex command").path;
@@ -273,8 +276,10 @@ export function install(argv = process.argv.slice(2)) {
   }
   if (builderModel === reviewModel) fail("Builder and reviewer must use distinct explicit model IDs");
 
-  const gitRoot = run("/usr/bin/git", ["rev-parse", "--show-toplevel"], project, "Git root check");
-  if (resolve(gitRoot) !== project) fail("Project must be the exact Git root");
+  const gitRoot = realpathSync(
+    run("/usr/bin/git", ["rev-parse", "--show-toplevel"], project, "Git root check"),
+  );
+  if (gitRoot !== project) fail("Project must be the exact Git root");
 
   const codexVersionText = run(realCodex, ["--version"], project, "Codex version check");
   const codexVersion = parseVersion(codexVersionText, "Codex");
@@ -288,6 +293,11 @@ export function install(argv = process.argv.slice(2)) {
   const ralphexVersion = parseVersion(ralphexVersionText, "Ralphex");
   if (!atLeast(ralphexVersion, [1, 6, 0])) fail("Ralphex 1.6.0 or newer is required");
 
+  ensurePrivateDirectoryChain(project, [".codexlooper"]);
+  ensurePrivateDirectoryChain(project, [".codexlooper", "runtime"]);
+  const binDir = ensurePrivateDirectoryChain(project, [".codexlooper", "bin"]);
+  const codexHome = ensurePrivateDirectoryChain(project, [".codexlooper", "codex-home"]);
+  ensurePrivateDirectoryChain(project, [".ralphex"]);
   ensureLocalGitExcludes(project);
 
   const runtime = installImmutableRuntime({
@@ -302,8 +312,6 @@ export function install(argv = process.argv.slice(2)) {
   });
 
   const home = resolve(project, ".codexlooper");
-  const binDir = resolve(home, "bin");
-  const codexHome = resolve(home, "codex-home");
   const controlledCodex = resolve(binDir, "codex");
   const terraExecutor = resolve(binDir, "terra-executor");
   const solReviewer = resolve(binDir, "sol-review");
