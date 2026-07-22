@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { install } from "../scripts/install.mjs";
 import { runPreflight } from "../scripts/preflight.mjs";
+import { initializeRunBudget, readRunBudget } from "../src/run-budget.mjs";
 import { removeTree } from "../test/helpers/remove-tree.mjs";
 
 function executable(path, content) {
@@ -288,7 +289,7 @@ test("controlled launcher preserves stdin and strips unrelated secrets", () => {
   }
 });
 
-test("Terra and Sol wrappers remain separate read-only invocations", () => {
+test("Terra and Sol wrappers remain separate budgeted read-only invocations", () => {
   const fixture = createFixture();
   const promptFile = join(tmpdir(), `ralphex-custom-prompt-${process.pid}-${Date.now()}.txt`);
   try {
@@ -309,17 +310,24 @@ test("Terra and Sol wrappers remain separate read-only invocations", () => {
       })}\n`,
       { mode: 0o600 },
     );
+    const budget = initializeRunBudget({
+      runDirectory,
+      projectRoot: fixture.project,
+      limits: result.budgets,
+    });
     writeFileSync(promptFile, "Review the current diff and report verified findings.\n", { mode: 0o600 });
+    const directEnv = modelEnv({
+      CODEXLOOPER_RUN_ID: "direct-test",
+      CODEXLOOPER_RUN_DIR: runDirectory,
+      CODEXLOOPER_RUN_POLICY: policyPath,
+      CODEXLOOPER_BUDGET_PATH: budget.statePath,
+    });
 
     const terra = spawnSync(result.terraExecutor, ["--print"], {
       cwd: fixture.project,
       encoding: "utf8",
       input: "task execution prompt",
-      env: modelEnv({
-        CODEXLOOPER_RUN_ID: "direct-test",
-        CODEXLOOPER_RUN_DIR: runDirectory,
-        CODEXLOOPER_RUN_POLICY: policyPath,
-      }),
+      env: directEnv,
     });
     assert.equal(terra.status, 0, terra.stderr);
     assert.match(terra.stdout, /RALPHEX:ALL_TASKS_DONE/);
@@ -328,13 +336,16 @@ test("Terra and Sol wrappers remain separate read-only invocations", () => {
     const sol = spawnSync(result.solReviewer, [promptFile], {
       cwd: fixture.project,
       encoding: "utf8",
-      env: modelEnv({ CODEXLOOPER_RUN_ID: "direct-test", CODEXLOOPER_RUN_DIR: runDirectory }),
+      env: directEnv,
     });
     assert.equal(sol.status, 0, sol.stderr);
     assert.equal(sol.stdout, "NO ISSUES FOUND\n");
     const usage = readFileSync(join(runDirectory, "usage.jsonl"), "utf8");
     assert.match(usage, /"profile":"builder"/);
     assert.match(usage, /"profile":"reviewer"/);
+    const budgetState = readRunBudget({ budgetPath: budget.statePath, projectRoot: fixture.project });
+    assert.deepEqual(budgetState.attempts, { builder: 1, reviewer: 1 });
+    assert.ok(budgetState.actual_estimated_cost_usd > 0);
   } finally {
     rmSync(promptFile, { force: true });
     removeTree(fixture.root);
@@ -375,6 +386,7 @@ test("generated runner preserves branch, enforces budgets and archives plan thro
     assert.equal(receipt.checks.reviewer_usage_present, true);
     assert.equal(receipt.budgets.state.attempts.builder, 1);
     assert.equal(receipt.budgets.state.attempts.reviewer, 1);
+    assert.ok(receipt.budgets.state.actual_estimated_cost_usd > 0);
     assert.ok(receipt.usage.totals.estimated_cost_usd > 0);
     assert.doesNotMatch(JSON.stringify(receipt), /closerouter_test_secret|OPENAI_API_KEY|GITHUB_TOKEN/);
     const hostEvents = readFileSync(join(runDirectory, "host-commits.jsonl"), "utf8");
