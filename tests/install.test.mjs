@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   statSync,
@@ -294,7 +295,8 @@ test("Terra and Sol wrappers remain separate budgeted read-only invocations", ()
   const promptFile = join(tmpdir(), `ralphex-custom-prompt-${process.pid}-${Date.now()}.txt`);
   try {
     const result = installFixture(fixture);
-    const runDirectory = join(fixture.project, ".codexlooper", "runs", "direct-test");
+    const projectRoot = realpathSync(fixture.project);
+    const runDirectory = join(projectRoot, ".codexlooper", "runs", "direct-test");
     mkdirSync(runDirectory, { recursive: true });
     const policyPath = join(runDirectory, "policy.json");
     writeFileSync(
@@ -324,17 +326,17 @@ test("Terra and Sol wrappers remain separate budgeted read-only invocations", ()
     });
 
     const terra = spawnSync(result.terraExecutor, ["--print"], {
-      cwd: fixture.project,
+      cwd: projectRoot,
       encoding: "utf8",
       input: "task execution prompt",
       env: directEnv,
     });
     assert.equal(terra.status, 0, terra.stderr);
     assert.match(terra.stdout, /RALPHEX:ALL_TASKS_DONE/);
-    assert.equal(readFileSync(join(fixture.project, "result.txt"), "utf8"), "fixture-pass\n");
+    assert.equal(readFileSync(join(projectRoot, "result.txt"), "utf8"), "fixture-pass\n");
 
     const sol = spawnSync(result.solReviewer, [promptFile], {
-      cwd: fixture.project,
+      cwd: projectRoot,
       encoding: "utf8",
       env: directEnv,
     });
