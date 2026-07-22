@@ -6,13 +6,13 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootstrap } from "../src/bootstrap.mjs";
+import { removeTree } from "./helpers/remove-tree.mjs";
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { encoding: "utf8", ...options });
@@ -117,7 +117,7 @@ test("bootstraps a clean Git project without replacing existing project files", 
     const rawReceipt = readFileSync(result.receiptPath, "utf8");
     assert.doesNotMatch(rawReceipt, /CLOSEROUTER_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|GITHUB_TOKEN/);
   } finally {
-    rmSync(current.root, { recursive: true, force: true });
+    removeTree(current.root);
   }
 });
 
@@ -133,7 +133,7 @@ test("bootstrap is idempotent after committing its visible scaffold", () => {
     assert.equal(second.runCommand, first.runCommand);
     assert.equal(second.runtimeId, first.runtimeId);
   } finally {
-    rmSync(current.root, { recursive: true, force: true });
+    removeTree(current.root);
   }
 });
 
@@ -147,6 +147,6 @@ test("bootstrap blocks a dirty worktree before writing files", () => {
     );
     assert.equal(existsSync(join(current.project, "ROUTER.md")), false);
   } finally {
-    rmSync(current.root, { recursive: true, force: true });
+    removeTree(current.root);
   }
 });
