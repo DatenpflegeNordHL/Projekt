@@ -23,6 +23,15 @@ function fail(code, message) {
   throw error;
 }
 
+function redact(value) {
+  let text = String(value || "");
+  const secret = process.env.CLOSEROUTER_API_KEY;
+  if (secret) text = text.replaceAll(secret, "[REDACTED]");
+  return text
+    .replace(/authorization\s*[:=]\s*bearer\s+[^\s,;]+/gi, "[REDACTED]")
+    .slice(0, 1000);
+}
+
 function positiveInteger(value, label) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1) {
@@ -50,7 +59,7 @@ function persistFailedReceipt(result, error) {
   result.receipt.checks.runtime_integrity = false;
   result.receipt.failure = {
     code: error.code || "CODEXLOOPER_FINAL_TRUST_FAILED",
-    message: String(error.message || error).slice(0, 1000),
+    message: redact(error.message || error),
   };
   const serialized = `${JSON.stringify(result.receipt, null, 2)}\n`;
   if (secret && serialized.includes(secret)) {
@@ -105,7 +114,7 @@ async function runWorker() {
     const cost = result.receipt.usage?.totals?.estimated_cost_usd ?? 0;
     if (result.receipt.status !== "completed") {
       process.stderr.write(
-        `CODEXLOOPER_RUN=BLOCK: ${result.receipt.failure?.code || "CODEXLOOPER_RUN_FAILED"}: ${result.receipt.failure?.message || "Run did not complete"}\n`,
+        `CODEXLOOPER_RUN=BLOCK: ${result.receipt.failure?.code || "CODEXLOOPER_RUN_FAILED"}: ${redact(result.receipt.failure?.message || "Run did not complete")}\n`,
       );
       process.stderr.write(`RECEIPT=${result.receiptPath}\n`);
       process.exitCode = 1;
@@ -117,7 +126,7 @@ async function runWorker() {
     }
   } catch (error) {
     process.stderr.write(
-      `CODEXLOOPER_RUN=BLOCK: ${error.code || "CODEXLOOPER_RUN_FAILED"}: ${error.message}\n`,
+      `CODEXLOOPER_RUN=BLOCK: ${error.code || "CODEXLOOPER_RUN_FAILED"}: ${redact(error.message)}\n`,
     );
     process.exitCode = 1;
   }
@@ -222,7 +231,7 @@ if (process.argv[1] && resolve(process.argv[1]) === THIS_FILE) {
       await superviseWorker();
     } catch (error) {
       process.stderr.write(
-        `CODEXLOOPER_RUN=BLOCK: ${error.code || "CODEXLOOPER_RUN_FAILED"}: ${error.message}\n`,
+        `CODEXLOOPER_RUN=BLOCK: ${error.code || "CODEXLOOPER_RUN_FAILED"}: ${redact(error.message)}\n`,
       );
       process.exitCode = 1;
     }
