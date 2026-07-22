@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   initializeRunBudget,
   readRunBudget,
+  recordActualEstimatedCost,
   reserveModelCall,
 } from "../src/run-budget.mjs";
 
@@ -65,6 +66,50 @@ test("reserves bounded builder and reviewer calls atomically", () => {
     const state = readRunBudget({ budgetPath: current.budgetPath, projectRoot: current.project });
     assert.deepEqual(state.attempts, { builder: 2, reviewer: 1 });
     assert.equal(state.reserved_cost_usd, 0.3);
+    assert.equal(state.actual_estimated_cost_usd, 0);
+  } finally {
+    rmSync(current.project, { recursive: true, force: true });
+  }
+});
+
+test("blocks a paid model call without a private run budget", () => {
+  const project = mkdtempSync(join(tmpdir(), "codexlooper-budget-required-"));
+  try {
+    assert.throws(
+      () => reserveModelCall("builder", { sourceEnv: {}, projectRoot: project }),
+      (error) => error.code === "CODEXLOOPER_BUDGET_REQUIRED",
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("reconciles actual estimated cost monotonically", () => {
+  const current = fixture();
+  try {
+    reserveModelCall("builder", {
+      sourceEnv: current.env,
+      projectRoot: current.project,
+      now: () => 1100,
+    });
+    const first = recordActualEstimatedCost(0.012345678, {
+      sourceEnv: current.env,
+      projectRoot: current.project,
+    });
+    assert.equal(first.actual_estimated_cost_usd, 0.012345678);
+    const second = recordActualEstimatedCost(0.025, {
+      sourceEnv: current.env,
+      projectRoot: current.project,
+    });
+    assert.equal(second.actual_estimated_cost_usd, 0.025);
+    assert.throws(
+      () =>
+        recordActualEstimatedCost(0.02, {
+          sourceEnv: current.env,
+          projectRoot: current.project,
+        }),
+      (error) => error.code === "CODEXLOOPER_BUDGET_INVALID",
+    );
   } finally {
     rmSync(current.project, { recursive: true, force: true });
   }
@@ -102,6 +147,22 @@ test("blocks the next call when profile or cost budget is exhausted", () => {
       (error) =>
         error.code === "CODEXLOOPER_BUDGET_CALLS_EXCEEDED" ||
         error.code === "CODEXLOOPER_BUDGET_COST_EXCEEDED",
+    );
+  } finally {
+    rmSync(current.project, { recursive: true, force: true });
+  }
+});
+
+test("blocks actual estimated cost above the run maximum", () => {
+  const current = fixture({ max_estimated_cost_usd: 0.2 });
+  try {
+    assert.throws(
+      () =>
+        recordActualEstimatedCost(0.200000001, {
+          sourceEnv: current.env,
+          projectRoot: current.project,
+        }),
+      (error) => error.code === "CODEXLOOPER_BUDGET_COST_EXCEEDED",
     );
   } finally {
     rmSync(current.project, { recursive: true, force: true });
