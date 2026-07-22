@@ -159,7 +159,9 @@ function shellQuote(value) {
 }
 
 function iniValue(value) {
-  if (value.includes("\0") || value.includes("\n") || value.includes("\r")) fail("Unsafe configuration value");
+  if (value.includes("\0") || value.includes("\n") || value.includes("\r")) {
+    fail("Unsafe configuration value");
+  }
   return value;
 }
 
@@ -246,6 +248,11 @@ function runWrapperScript({
   return `#!/bin/sh\nset -eu\ncd ${shellQuote(project)}\nexport CODEXLOOPER_PROJECT=${shellQuote(project)}\nexport CODEXLOOPER_REAL_CODEX=${shellQuote(realCodex)}\nexport CODEXLOOPER_MEX_COMMAND=${shellQuote(mexCommand)}\nexport CODEXLOOPER_RALPHEX_COMMAND=${shellQuote(ralphexCommand)}\nexport CODEXLOOPER_BUILDER_MODEL=${shellQuote(builderModel)}\nexport CODEXLOOPER_REVIEW_MODEL=${shellQuote(reviewModel)}\nexport CODEXLOOPER_BUILDER_REASONING=${shellQuote(builderReasoning)}\nexport CODEXLOOPER_REVIEW_REASONING=${shellQuote(reviewReasoning)}\n${runtimeExports(runtime, budgets)}\nexec ${shellQuote(process.execPath)} ${shellQuote(runner)} "$@"\n`;
 }
 
+function vcsWrapperScript({ project, runtime, budgets }) {
+  const guard = resolve(runtime.runtimeDirectory, "scripts", "vcs-guard.mjs");
+  return `#!/bin/sh\nset -eu\nexport CODEXLOOPER_PROJECT=${shellQuote(project)}\n${runtimeExports(runtime, budgets)}\nexec ${shellQuote(process.execPath)} ${shellQuote(guard)} "$@"\n`;
+}
+
 export function install(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const project = resolve(args["--project"]);
@@ -300,6 +307,7 @@ export function install(argv = process.argv.slice(2)) {
   const controlledCodex = resolve(binDir, "codex");
   const terraExecutor = resolve(binDir, "terra-executor");
   const solReviewer = resolve(binDir, "sol-review");
+  const ralphexVcsGuard = resolve(binDir, "ralphex-vcs");
   const runCommand = resolve(binDir, "codexlooper");
   const ralphexConfig = resolve(project, ".ralphex", "config");
 
@@ -322,7 +330,7 @@ export function install(argv = process.argv.slice(2)) {
     controlledCodex,
     wrapperScript({
       ...wrapperOptions,
-      entrypoint: resolve(runtime.runtimeDirectory, "bin", "codex-closerouter.mjs"),
+      entrypoint: resolve(runtime.runtimeDirectory, "bin", "codex-runtime.mjs"),
     }),
     0o500,
   );
@@ -330,7 +338,7 @@ export function install(argv = process.argv.slice(2)) {
     terraExecutor,
     wrapperScript({
       ...wrapperOptions,
-      entrypoint: resolve(runtime.runtimeDirectory, "bin", "terra-as-claude.mjs"),
+      entrypoint: resolve(runtime.runtimeDirectory, "bin", "terra-runtime.mjs"),
     }),
     0o500,
   );
@@ -338,12 +346,13 @@ export function install(argv = process.argv.slice(2)) {
     solReviewer,
     wrapperScript({
       ...wrapperOptions,
-      entrypoint: resolve(runtime.runtimeDirectory, "bin", "sol-review.mjs"),
+      entrypoint: resolve(runtime.runtimeDirectory, "bin", "sol-runtime.mjs"),
     }),
     0o500,
   );
+  writeAtomic(ralphexVcsGuard, vcsWrapperScript({ project, runtime, budgets }), 0o500);
 
-  const config = `claude_command = ${iniValue(terraExecutor)}\nclaude_args =\ntask_model =\nreview_model =\npreserve_anthropic_api_key = false\nexternal_review_tool = custom\ncustom_review_script = ${iniValue(solReviewer)}\nfinalize_enabled = false\nmove_plan_on_completion = true\ntask_retry_count = 1\nmax_iterations = 12\nmax_external_iterations = 2\nreview_patience = 2\nsession_timeout = 1h\nidle_timeout = 10m\nplans_dir = docs/plans\n`;
+  const config = `claude_command = ${iniValue(terraExecutor)}\nclaude_args =\ntask_model =\nreview_model =\npreserve_anthropic_api_key = false\nexternal_review_tool = custom\ncustom_review_script = ${iniValue(solReviewer)}\nfinalize_enabled = false\nmove_plan_on_completion = false\ntask_retry_count = 1\nmax_iterations = 12\nmax_external_iterations = 2\nreview_patience = 2\nsession_timeout = 1h\nidle_timeout = 10m\nplans_dir = docs/plans\nvcs_command = ${iniValue(ralphexVcsGuard)}\n`;
   writeAtomic(ralphexConfig, config, 0o600);
 
   writeAtomic(
@@ -375,6 +384,7 @@ export function install(argv = process.argv.slice(2)) {
     controlled_codex: controlledCodex,
     terra_executor: terraExecutor,
     sol_reviewer: solReviewer,
+    ralphex_vcs_guard: ralphexVcsGuard,
     run_command: runCommand,
     codex_home: codexHome,
     writable_root: project,
@@ -398,6 +408,7 @@ export function install(argv = process.argv.slice(2)) {
     controlledCodex,
     terraExecutor,
     solReviewer,
+    ralphexVcsGuard,
     ralphexConfig,
     runtimeDirectory: runtime.runtimeDirectory,
     runtimeManifest: runtime.manifestPath,
