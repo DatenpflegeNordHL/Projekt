@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync } from "node:fs";
+import { accessSync, constants, existsSync, realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -115,7 +115,7 @@ function verifiedRuntime(manifestPath, manifestSha256) {
 
 export function runPreflight(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
-  const project = resolve(args["--project"]);
+  const project = realpathSync(resolve(args["--project"]));
   const mex = args["--mex-command"];
   const codex = args["--real-codex"];
   const ralphex = args["--ralphex-command"];
@@ -135,8 +135,8 @@ export function runPreflight(argv = process.argv.slice(2)) {
   requireExecutable(codex, "Codex command");
   requireExecutable(ralphex, "Ralphex command");
 
-  const gitRoot = run("/usr/bin/git", ["rev-parse", "--show-toplevel"], project, "Git root check");
-  if (resolve(gitRoot) !== project) fail("Project must be the exact Git root");
+  const gitRoot = realpathSync(run("/usr/bin/git", ["rev-parse", "--show-toplevel"], project, "Git root check"));
+  if (gitRoot !== project) fail("Project must be the exact Git root");
 
   const agentAnchorExists =
     existsSync(resolve(project, "AGENTS.md")) || existsSync(resolve(project, ".mex", "AGENTS.md"));
