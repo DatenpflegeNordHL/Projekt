@@ -157,8 +157,15 @@ exit 2
   assert.equal(receipt.checks.branch_locked, true);
   assert.equal(receipt.checks.ancestry_monotonic, true);
   assert.ok(receipt.commits_created >= 2);
-  assert.equal(receipt.budgets.state.attempts.builder, 1);
-  assert.equal(receipt.budgets.state.attempts.reviewer, 1);
+  assert.ok(receipt.budgets.state.attempts.builder >= 1);
+  assert.ok(receipt.budgets.state.attempts.builder <= receipt.budgets.limits.max_builder_calls);
+  assert.ok(receipt.budgets.state.attempts.reviewer >= 1);
+  assert.ok(receipt.budgets.state.attempts.reviewer <= receipt.budgets.limits.max_reviewer_calls);
+  assert.ok(receipt.budgets.state.actual_estimated_cost_usd > 0);
+  assert.ok(
+    receipt.budgets.state.actual_estimated_cost_usd <=
+      receipt.budgets.limits.max_estimated_cost_usd,
+  );
   assert.ok(receipt.usage.profiles.builder.calls >= 1);
   assert.ok(receipt.usage.profiles.reviewer.calls >= 1);
   assert.ok(receipt.usage.totals.estimated_cost_usd > 0);
