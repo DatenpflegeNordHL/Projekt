@@ -17,9 +17,9 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { install } from "./install.mjs";
-import { runPreflight } from "./preflight.mjs";
+import { bootstrap } from "../src/bootstrap.mjs";
 import { assertGitAuthority } from "../src/git-authority.mjs";
+import { runPreflight } from "./preflight.mjs";
 
 const THIS_FILE = fileURLToPath(import.meta.url);
 const REPO_ROOT = realpathSync(resolve(dirname(THIS_FILE), ".."));
@@ -30,8 +30,8 @@ function fail(message) {
 
 function safeEnv(sourceEnv = process.env) {
   return Object.fromEntries(
-    ["HOME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TMP", "TEMP"].flatMap((key) =>
-      sourceEnv[key] === undefined ? [] : [[key, sourceEnv[key]]],
+    ["HOME", "USER", "LOGNAME", "SHELL", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TMP", "TEMP"].flatMap(
+      (key) => (sourceEnv[key] === undefined ? [] : [[key, sourceEnv[key]]]),
     ),
   );
 }
@@ -104,16 +104,22 @@ function removeFixture(path) {
 
 function createTargetFixture(root) {
   const project = join(root, "target project");
-  mkdirSync(join(project, "docs", "plans"), { recursive: true });
+  mkdirSync(project, { recursive: true });
   git(project, ["init", "-b", "main"]);
   git(project, ["config", "user.name", "Runtime A Proof"]);
   git(project, ["config", "user.email", "runtime-a-proof@example.invalid"]);
-  writeFileSync(join(project, "AGENTS.md"), "# Runtime A proof fixture\n");
-  writeFileSync(join(project, "ROUTER.md"), "# Runtime A proof router\n");
-  writeFileSync(join(project, "docs", "plans", "README.md"), "# Plans\n");
-  git(project, ["add", "."]);
-  git(project, ["commit", "-m", "chore: initialize Runtime A proof fixture"]);
-  return project;
+  writeFileSync(join(project, "README.md"), "# Runtime A proof target\n");
+  git(project, ["add", "README.md"]);
+  git(project, ["commit", "-m", "chore: initialize Runtime A proof target"]);
+  return realpathSync(project);
+}
+
+function commitBootstrapScaffold(project) {
+  git(project, ["add", "--all"]);
+  const status = git(project, ["status", "--porcelain=v1", "--untracked-files=all"]);
+  if (status) git(project, ["commit", "-m", "chore: commit Runtime A proof scaffold"]);
+  const remaining = git(project, ["status", "--porcelain=v1", "--untracked-files=normal"]);
+  if (remaining) fail(`Runtime A proof target is dirty after scaffold commit: ${remaining}`);
 }
 
 function assertSourceClean() {
@@ -144,6 +150,14 @@ function preflightArgs(project, tools, installed, branch, startSha) {
   ];
 }
 
+function tamperWasRejected(error) {
+  return (
+    error?.code === "CODEXLOOPER_RUNTIME_INTEGRITY_FAILED" ||
+    error?.code === "CODEXLOOPER_RUNTIME_PATH_INVALID" ||
+    /Runtime file mode changed|Runtime file hash changed|integrity verification failed/u.test(String(error?.message || error))
+  );
+}
+
 export function proveRuntimeA({
   codex,
   mex,
@@ -163,9 +177,12 @@ export function proveRuntimeA({
       mex: realpathSync(mex),
       ralphex: realpathSync(ralphex),
     };
-    const installed = install([
+
+    const installed = bootstrap([
       "--project",
       project,
+      "--project-name",
+      "Runtime A Proof Target",
       "--real-codex",
       tools.codex,
       "--mex-command",
@@ -186,10 +203,13 @@ export function proveRuntimeA({
       "0",
     ]);
 
+    commitBootstrapScaffold(project);
+
     const state = JSON.parse(readFileSync(join(project, ".codexlooper", "install-state.json"), "utf8"));
     assert.equal(state.runtime.source_commit, sourceCommit);
     assert.equal(state.runtime.id, installed.runtimeId);
     assert.equal(state.runtime.manifest_sha256, installed.runtimeManifestSha256);
+    assert.ok(installed.receipt.visible_changes.some((path) => path.startsWith(".mex/")));
 
     for (const wrapper of [
       installed.runCommand,
@@ -200,7 +220,10 @@ export function proveRuntimeA({
     ]) {
       const content = readFileSync(wrapper, "utf8");
       assert.match(content, new RegExp(installed.runtimeDirectory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-      assert.doesNotMatch(content, new RegExp(`${REPO_ROOT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/(?:src|bin|scripts)/`));
+      assert.doesNotMatch(
+        content,
+        new RegExp(`${REPO_ROOT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/(?:src|bin|scripts)/`),
+      );
     }
 
     const branch = git(project, ["branch", "--show-current"]);
@@ -239,9 +262,7 @@ export function proveRuntimeA({
     appendFileSync(tamperPath, "\n// runtime-a-proof-tamper\n");
     assert.throws(
       () => runPreflight(preflightArgs(project, tools, installed, branch, startSha)),
-      (error) =>
-        error.code === "CODEXLOOPER_RUNTIME_INTEGRITY_FAILED" ||
-        error.code === "CODEXLOOPER_RUNTIME_PATH_INVALID",
+      tamperWasRejected,
     );
 
     const evidence = {
@@ -261,6 +282,7 @@ export function proveRuntimeA({
       },
       checks: {
         source_checkout_clean: true,
+        mex_scaffold_initialized: true,
         wrappers_use_immutable_runtime: true,
         initial_preflight: "PASS",
         branch_drift_rejected: true,
