@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { spawnBoundedProcess } from "../src/bounded-process.mjs";
 
 const THIS_FILE = fileURLToPath(import.meta.url);
-const WORKER = resolve(new URL("./run-worker.mjs", import.meta.url).pathname);
+const WORKER = fileURLToPath(new URL("./run-worker.mjs", import.meta.url));
 
 function timeoutFromEnvironment() {
   const parsed = Number(process.env.CODEXLOOPER_MAX_RUN_DURATION_MS);
