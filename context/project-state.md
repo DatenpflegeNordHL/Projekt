@@ -3,16 +3,15 @@
 ## Working
 
 - WP0 is complete and merged at `8e3b589a09bd2935dea19ce94b36e18cc2482d83`.
-- Ralphex v1.6.0 integration is verified from source and end to end.
+- Ralphex integration is verified from source and end to end.
 - MEX preflight, controlled CloseRouter launchers and isolated runtime state exist.
 - Terra is the implementation and fix model.
 - Sol is a separate read-only reviewer.
 - Real CloseRouter identity and Codex CLI Responses smoke passed for both models.
-- Node.js 20 and 22 CI pass on the accepted core baseline.
-- The repository secret `CLOSEROUTER_API_KEY` is configured for GitHub workflows.
 - Nested executable plans are rejected and completed-plan filename collisions are blocked.
 - Rejected Terra builder patches are retained privately for diagnostics.
-- The current complete local regression result is 49 tests passed, 0 failed.
+- The current complete local regression result is 68 tests passed, 0 failed.
+- WP6A Loop Trust Hardening is complete.
 
 ## Core CLI status
 
@@ -25,36 +24,57 @@
 - Every run writes an atomic receipt with Git heads, commits, completion gates, tokens and estimated cost.
 - A run is blocked unless the plan is completed, the worktree is clean, at least one commit exists and both Terra and Sol usage are present.
 
-## Active blocker: mutable trust root
+## WP6A completed trust root
 
-The current generated wrappers still execute mutable CodexLooper source files
-from the same repository being changed. Therefore the current autonomous loop
-must not modify and approve its own runner, Terra adapter, Sol reviewer or Git
-supervisor.
+The active runtime is now content-addressed, copied outside the mutable source path for the run, sealed read-only and verified by SHA-256 manifest before model calls and host mutation boundaries.
+
+The runner now enforces:
+
+- exact repository-root and branch authority;
+- monotonic ancestry from the run-start SHA;
+- immutable Terra, Sol, runner and Git-supervisor code for the active run;
+- builder, reviewer, duration and estimated-cost budgets;
+- process-group timeout with SIGTERM and SIGKILL fallback;
+- a non-arbitrary validation allowlist;
+- host-controlled plan archival;
+- symlink-safe private installation roots.
 
 The controlling invariant document is:
 `docs/architecture/CODEXLOOPER_LOOP_TRUST_INVARIANTS.md`
 
+Independent review evidence is recorded in:
+`docs/architecture/WP6A_MANUAL_TRUST_REVIEW.md`
+
+The authorised macOS Runtime A proof is recorded in:
+`docs/architecture/WP6A_RUNTIME_A_LOCAL_PROOF.md`
+
+## Runtime A proof
+
+- source commit: `9c3798b15c5f794c0742d166f8ffead8da8acaf0`;
+- platform: macOS arm64;
+- local regression: 68 passed, 0 failed;
+- real MEX scaffold initialised through bootstrap;
+- immutable wrapper paths verified;
+- preflight passed;
+- branch drift rejected;
+- runtime tampering rejected;
+- paid model calls: 0;
+- CRG builds: 0.
+
 ## Fixed next sequence
 
-1. **WP6A Loop Trust Hardening**
-   - implement outside the current autonomous loop;
-   - install a content-addressed immutable runtime;
-   - add runtime manifest verification;
-   - add branch lock and monotonic ancestry checks;
-   - add builder, reviewer, duration and cost budgets;
-   - pass CI and independent review;
-   - bootstrap immutable Runtime A.
-2. **WP6B Read-only CRG Integration**
-   - currently stored at
+1. **WP6B Read-only CRG Integration**
+   - specification remains at
      `docs/planning/WP6B_READONLY_CODE_REVIEW_GRAPH_INTEGRATION.md`;
-   - remains non-executable until WP6A passes;
-   - promote an exact reviewed copy to `docs/plans/` only after Runtime A exists;
-   - execute with original CRG v2.3.6 and immutable Runtime A.
-3. **WP6C Isolated Live CRG Smoke**
+   - WP6A prerequisites are now satisfied;
+   - install the original CRG v2.3.6 executable in an isolated environment;
+   - review and promote an exact bounded copy to `docs/plans/` only under explicit execution authorisation;
+   - execute with immutable Runtime A;
+   - keep CRG advisory-only and fail-open toward the independent Sol review.
+2. **WP6C Isolated Live CRG Smoke**
    - bootstrap Runtime B from the reviewed WP6B candidate;
    - prove success, no-change, fail-open, branch-lock, runtime-tamper and secret-leak cases in a fixture repository.
-4. Obtain explicit merge authorisation, merge, then bootstrap Runtime C from `main`.
+3. Obtain explicit merge authorisation, merge, then bootstrap Runtime C from `main`.
 
 No step may be skipped or reordered because a later test passes.
 
@@ -76,7 +96,4 @@ No step may be skipped or reordered because a later test passes.
 
 ## Next use gate
 
-The immediate next engineering task is WP6A. Do not start the former CRG plan
-from terminal; it has been removed from `docs/plans/` deliberately. After WP6A
-passes and Runtime A is bootstrapped, promote and execute WP6B through the normal
-receipt runner.
+WP6A is complete. WP6B may now be prepared from the reviewed planning specification, but it must remain non-executable until explicit authorisation is given to promote and run it. PR 7 remains Draft and must not be merged or released without separate authorisation.
