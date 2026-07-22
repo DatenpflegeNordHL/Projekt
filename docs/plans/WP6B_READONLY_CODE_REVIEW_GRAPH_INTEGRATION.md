@@ -1,6 +1,6 @@
 # WP6B Read-only Code Review Graph Integration
 
-Status: **BLOCKED ON CRG ENVIRONMENT SEAL AND SANDBOX PROOF**
+Status: **AUTHORISED FOR IMMUTABLE RUNTIME A EXECUTION**
 
 WP6A Loop Trust Hardening and the authorised macOS Runtime A proof are complete.
 The original Code Review Graph v2.3.6 package is installed and its local package
@@ -12,14 +12,11 @@ Independent plan review is recorded in:
 
 `docs/architecture/WP6B_INDEPENDENT_PLAN_REVIEW.md`
 
-This specification intentionally remains outside `docs/plans/`. It must not be
-promoted or executed until:
-
-1. the complete CRG environment is content-manifested and sealed read-only;
-2. the canonical Python interpreter identity is recorded;
-3. the macOS sandbox prerequisite is proven;
-4. this exact plan receives a final independent review with no blocking finding;
-5. explicit WP6B execution authorisation is given.
+This executable copy was promoted unchanged from reviewed planning blob
+`35efe0d6bde026e6163f6c164adbd301d54bae27` after the complete environment
+seal, macOS sandbox proof, final independent review and explicit WP6B execution
+authorisation passed. Only status and parser-required execution metadata differ
+from the reviewed planning blob.
 
 Controlling contract:
 `docs/architecture/CODEXLOOPER_LOOP_TRUST_INVARIANTS.md`
@@ -46,16 +43,17 @@ after Runtime B is installed from the reviewed WP6B candidate.
 - CRG graph builds during installation proof: `0`.
 - `code-review-graph install` used: `false`.
 
-## Open prerequisites
+## Execution prerequisites
 
-- full isolated-environment SHA-256 manifest;
-- canonical Python interpreter path, version and SHA-256;
-- read-only CRG environment seal;
-- post-seal exact version proof;
-- verified macOS sandbox command and profile;
-- denied network proof;
-- denied write-outside-private-run proof;
-- final independent review of this exact planning file.
+- full isolated-environment SHA-256 manifest: PASS;
+- canonical Python interpreter identity: PASS;
+- read-only CRG environment seal: PASS;
+- post-seal exact version proof: PASS;
+- verified macOS sandbox command and profile: PASS;
+- denied network proof: PASS;
+- denied write-outside-private-run proof: PASS;
+- final independent review: PASS;
+- explicit WP6B execution authorisation: PASS.
 
 ## Pinned upstream identity
 
@@ -333,6 +331,54 @@ The promoted executable plan may allow only the minimum necessary paths:
 
 Do not allow runtime directories, Git metadata, user configuration, generated
 CRG data or unrelated product files.
+
+## Allowed paths
+
+- `package.json`
+- `src/code-review-graph.mjs`
+- `src/bootstrap.mjs`
+- `src/run.mjs`
+- `src/run-hardened.mjs`
+- `src/profiles.mjs`
+- `src/run-budget.mjs`
+- `src/runtime-integrity.mjs`
+- `src/runtime-paths.mjs`
+- `bin/sol-review.mjs`
+- `scripts/bootstrap.mjs`
+- `scripts/install.mjs`
+- `scripts/preflight.mjs`
+- `scripts/run.mjs`
+- `test/**`
+- `tests/**`
+- `README.md`
+- `docs/ROADMAP.md`
+- `context/project-state.md`
+- `docs/WP6_CODE_REVIEW_GRAPH.md`
+- `this plan file`
+
+## Validation Commands
+
+- `node --check src/code-review-graph.mjs`
+- `node --check src/bootstrap.mjs`
+- `node --check src/run.mjs`
+- `node --check src/run-hardened.mjs`
+- `node --check src/profiles.mjs`
+- `node --check src/run-budget.mjs`
+- `node --check bin/sol-review.mjs`
+- `node --check scripts/bootstrap.mjs`
+- `node --check scripts/install.mjs`
+- `node --check scripts/preflight.mjs`
+- `node --check scripts/run.mjs`
+- `git diff --check`
+
+## Execution-time validation interpretation
+
+Immutable Runtime A intentionally accepts only the WP6A validation allowlist.
+Therefore every candidate patch receives the syntax and diff-hygiene checks
+above. Repository-wide `npm run check`, the complete test suite, GitHub CI and
+the independent final diff review remain mandatory post-run acceptance gates
+before Runtime B may be created. A Runtime A completion receipt alone does not
+declare WP6B complete.
 
 ## Tasks after promotion
 
