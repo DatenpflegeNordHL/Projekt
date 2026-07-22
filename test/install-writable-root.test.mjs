@@ -47,8 +47,12 @@ test("installer pins the exact project as Codex workspace writable root", () => 
 
   try {
     run("/usr/bin/git", ["init", "-b", "main"], project);
+    run("/usr/bin/git", ["config", "user.name", "Installer Fixture"], project);
+    run("/usr/bin/git", ["config", "user.email", "fixture@example.invalid"], project);
     writeFileSync(join(project, "AGENTS.md"), "# Agent\n");
     writeFileSync(join(project, "ROUTER.md"), "# Router\n");
+    run("/usr/bin/git", ["add", "."], project);
+    run("/usr/bin/git", ["commit", "-m", "chore: initialize fixture"], project);
 
     const result = install([
       "--project",
