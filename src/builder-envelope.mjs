@@ -144,12 +144,13 @@ export function createBuilderOutputSchemaFile({ sourceEnv = process.env, project
   ) {
     fail("CODEXLOOPER_RUN_DIR_INVALID", "CODEXLOOPER_RUN_DIR must be an absolute path");
   }
-  const root = realpathSync(projectRoot);
+  const requestedRoot = resolve(projectRoot);
   const runId = basename(configuredRunDirectory);
-  const expected = resolve(root, ".codexlooper", "runs", runId);
-  if (configuredRunDirectory !== expected) {
+  const requestedExpected = resolve(requestedRoot, ".codexlooper", "runs", runId);
+  if (resolve(configuredRunDirectory) !== requestedExpected) {
     fail("CODEXLOOPER_RUN_DIR_INVALID", "Builder run directory must stay inside .codexlooper/runs");
   }
+  const root = realpathSync(requestedRoot);
   const runDirectory = ensurePrivateDirectoryChain(root, [".codexlooper", "runs", runId]);
   const stat = lstatSync(runDirectory);
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
