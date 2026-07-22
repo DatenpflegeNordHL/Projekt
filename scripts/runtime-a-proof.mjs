@@ -124,7 +124,7 @@ function commitBootstrapScaffold(project) {
 
 function assertSourceClean() {
   const status = git(REPO_ROOT, ["status", "--porcelain=v1", "--untracked-files=normal"]);
-  if (status) fail("Runtime A proof requires a clean candidate checkout");
+  if (status) fail(`Runtime A proof requires a clean candidate checkout: ${status}`);
 }
 
 function preflightArgs(project, tools, installed, branch, startSha) {
@@ -164,8 +164,9 @@ export function proveRuntimeA({
   ralphex,
   outputPath,
   now = () => new Date(),
+  sourceCleanCheck = assertSourceClean,
 } = {}) {
-  assertSourceClean();
+  sourceCleanCheck();
   const sourceCommit = git(REPO_ROOT, ["rev-parse", "HEAD"]);
   assert.match(sourceCommit, /^[0-9a-f]{40}$/);
 
