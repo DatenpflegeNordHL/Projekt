@@ -2,7 +2,7 @@
 
 ## Verdict
 
-**BLOCKED PENDING REMEDIATION**
+**BLOCKED PENDING ENVIRONMENT SEAL AND SANDBOX PROOF**
 
 The review was performed against the exact WP6B planning specification and the original Code Review Graph v2.3.6 source at commit:
 
@@ -19,6 +19,19 @@ No CRG graph was built and no model was called.
 - exact no-change output: `No changes detected.`;
 - `CRG_DATA_DIR` controls graph storage when no registry entry overrides it.
 
+## Accepted CPython 3.14 launcher exception
+
+A clean local rebuild reproduced the POSIX Python 3.14 `venv` launcher
+`bin/𝜋thon`. Upstream CPython tracks this as an intentional Python 3.14 venv
+feature. The local evidence and exact accepted identity are recorded in:
+
+`docs/architecture/WP6B_PYTHON314_VENV_LAUNCHER_REVIEW.md`
+
+The exception is narrow and fail-closed. It applies only to the exact U+1D70B
+filename, UTF-8 bytes, `python3.14` literal target and canonical Python 3.14.6
+interpreter target recorded there. The adapter never invokes this launcher.
+Every other non-ASCII entry or unexpected symlink remains rejected.
+
 ## Blocking finding 1: incomplete executable identity
 
 The recorded SHA-256 covers only the generated console entry script. That script imports the Python interpreter, the `code_review_graph` package and transitive dependencies from the virtual environment. An unchanged console script therefore does not prove unchanged runtime code.
@@ -27,6 +40,7 @@ Required remediation:
 
 - record the canonical interpreter path, version and SHA-256;
 - create a deterministic SHA-256 manifest for every regular file and symlink target in the isolated CRG environment;
+- represent the pinned CPython 3.14 `bin/𝜋thon` launcher explicitly in the manifest;
 - reject unknown, missing, changed or newly added files;
 - seal the environment read-only after manifest creation;
 - verify the complete environment manifest before every CRG invocation;
@@ -83,4 +97,4 @@ An alternative operating-system isolation mechanism requires separate architectu
 
 ## Gate result
 
-The local package installation prerequisite is satisfied, but WP6B must remain outside `docs/plans/` until all four blocking findings are reflected in the planning specification and the CRG environment seal plus sandbox prerequisites are proven locally.
+The local package installation and pinned Python 3.14 launcher identity are satisfied. WP6B must remain outside `docs/plans/` until the complete environment seal and macOS sandbox prerequisites are proven locally and the exact planning specification receives a final independent review with no blocking finding.
