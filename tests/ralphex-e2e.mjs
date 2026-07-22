@@ -6,13 +6,13 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { install } from "../scripts/install.mjs";
+import { removeTree } from "../test/helpers/remove-tree.mjs";
 
 const ralphex = process.env.RALPHEX_BIN;
 if (!ralphex) throw new Error("RALPHEX_BIN is required");
@@ -171,5 +171,5 @@ exit 2
 
   process.stdout.write("CODEXLOOPER_RALPHEX_E2E=PASS\n");
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  removeTree(root);
 }
