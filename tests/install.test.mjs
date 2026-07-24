@@ -50,8 +50,9 @@ function createFixture(
   writeFileSync(join(project, "ROUTER.md"), "# Router\n");
   writeFileSync(
     join(project, "package.json"),
-    `${JSON.stringify({ private: true, scripts: { check: "node --check result.txt" } })}\n`,
+    `${JSON.stringify({ private: true, scripts: { check: "node --check check.mjs" } })}\n`,
   );
+  writeFileSync(join(project, "check.mjs"), "export const fixtureCheck = true;\n");
   writeFileSync(
     join(project, "docs", "plans", "fixture.md"),
     "# Plan: Fixture\n\n## Allowed paths\n- `result.txt`\n- `this plan file`\n\n## Validation Commands\n- `test -f docs/plans/fixture.md`\n\n### Task 1: Result\n- [ ] Create result.txt\n",
