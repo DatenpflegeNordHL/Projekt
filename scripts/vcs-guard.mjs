@@ -86,9 +86,20 @@ const READ_ONLY_BRANCH_OPTIONS = new Set([
   "--show-current",
   "--list",
 ]);
+const READ_ONLY_SYMBOLIC_REF_INVOCATIONS = [
+  ["symbolic-ref", "--short", "HEAD"],
+  ["symbolic-ref", "refs/remotes/origin/HEAD"],
+];
+
+function matchesArguments(args, expected) {
+  return args.length === expected.length && args.every((value, index) => value === expected[index]);
+}
 
 function readOnlyAllowed(args) {
   if (READ_ONLY_COMMANDS.has(args[0])) return true;
+  if (READ_ONLY_SYMBOLIC_REF_INVOCATIONS.some((expected) => matchesArguments(args, expected))) {
+    return true;
+  }
   if (args[0] !== "branch") return false;
   return args.length === 1 || args.slice(1).every((arg) => READ_ONLY_BRANCH_OPTIONS.has(arg));
 }

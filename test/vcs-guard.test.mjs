@@ -78,6 +78,46 @@ test("read-only Git inspection is delegated", () => {
   }
 });
 
+test("allows Ralphex's exact read-only symbolic-ref branch inspections", () => {
+  const project = fixture();
+  try {
+    git(project, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+
+    const currentBranch = guard(project, ["symbolic-ref", "--short", "HEAD"]);
+    assert.equal(currentBranch.status, 0, currentBranch.stderr);
+    assert.equal(currentBranch.stdout, "main\n");
+
+    const remoteHead = guard(project, ["symbolic-ref", "refs/remotes/origin/HEAD"]);
+    assert.equal(remoteHead.status, 0, remoteHead.stderr);
+    assert.equal(remoteHead.stdout, "refs/remotes/origin/main\n");
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("blocks mutating and non-exact symbolic-ref invocations", () => {
+  const project = fixture();
+  try {
+    for (const args of [
+      ["symbolic-ref", "HEAD", "refs/heads/anderer-branch"],
+      ["symbolic-ref", "-m", "reason", "HEAD", "refs/heads/anderer-branch"],
+      ["symbolic-ref", "--delete", "HEAD"],
+      ["symbolic-ref", "--short", "HEAD", "zusätzliches-argument"],
+      ["symbolic-ref", "refs/remotes/origin/HEAD", "zusätzliches-argument"],
+      ["symbolic-ref", "--quiet", "--short", "HEAD"],
+      ["-C", "/anderer/pfad", "symbolic-ref", "--short", "HEAD"],
+    ]) {
+      const result = guard(project, args);
+      assert.equal(result.status, 1, `${args.join(" ")}: ${result.stderr}`);
+      assert.match(result.stderr, /not allowlisted/);
+    }
+    assert.equal(git(project, ["branch", "--show-current"]), "main");
+    assert.equal(git(project, ["symbolic-ref", "--short", "HEAD"]), "main");
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
 test("blocks unallowlisted mutations and global options before a Git subcommand", () => {
   const project = fixture();
   try {
