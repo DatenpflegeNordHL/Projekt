@@ -32,7 +32,12 @@ function git(project, args) {
   return result.stdout.trim();
 }
 
-function createFixture(codexVersion = "0.130.0", ralphexVersion = "1.6.0", mexVersion = "0.6.3") {
+function createFixture(
+  codexVersion = "0.130.0",
+  ralphexVersion = "1.6.0",
+  mexVersion = "0.6.3",
+  { ralphexExitAfterBuilder = false } = {},
+) {
   const root = mkdtempSync(join(tmpdir(), "codexlooper-fixture-"));
   const project = join(root, "project with spaces");
   const tools = join(root, "tools");
@@ -117,6 +122,7 @@ if [ "\${1:-}" = "--version" ]; then echo 'ralphex ${ralphexVersion}'; exit 0; f
 terra="$(sed -n 's/^claude_command = //p' .ralphex/config)"
 sol="$(sed -n 's/^custom_review_script = //p' .ralphex/config)"
 printf '%s\n' 'Read the plan file at docs/plans/fixture.md and complete the current task.' | "$terra" --print --output-format stream-json --verbose --dangerously-skip-permissions
+${ralphexExitAfterBuilder ? "exit 23" : ""}
 prompt="\${TMPDIR:-/tmp}/ralphex-custom-prompt-$$.txt"
 umask 077
 printf '%s\n' 'Review the committed fixture changes.' > "$prompt"
@@ -394,6 +400,50 @@ test("generated runner preserves branch, enforces budgets and archives plan thro
     const hostEvents = readFileSync(join(runDirectory, "host-commits.jsonl"), "utf8");
     assert.match(hostEvents, /"transport":"structured_patch"/);
     assert.match(hostEvents, /"transport":"host_plan_archive"/);
+  } finally {
+    removeTree(fixture.root);
+  }
+});
+
+test("failed runner receipts reconcile builder usage and clean final state", () => {
+  const fixture = createFixture(
+    "0.130.0",
+    "1.6.0",
+    "0.6.3",
+    { ralphexExitAfterBuilder: true },
+  );
+  try {
+    const result = installFixture(fixture);
+    const run = spawnSync(
+      result.runCommand,
+      ["docs/plans/fixture.md"],
+      {
+        cwd: fixture.project,
+        encoding: "utf8",
+        env: modelEnv(),
+        timeout: 120_000,
+      },
+    );
+
+    assert.notEqual(run.status, 0);
+
+    const runDirectory = onlyRunDirectory(fixture.project);
+    const receipt = JSON.parse(
+      readFileSync(join(runDirectory, "receipt.json"), "utf8"),
+    );
+
+    assert.equal(receipt.status, "failed");
+    assert.equal(receipt.failure.code, "CODEXLOOPER_RALPHEX_FAILED");
+    assert.equal(receipt.ralphex_exit_code, 23);
+    assert.equal(receipt.checks.clean_after, true);
+    assert.equal(receipt.checks.builder_usage_present, true);
+    assert.equal(receipt.checks.reviewer_usage_present, false);
+    assert.equal(receipt.checks.branch_locked, true);
+    assert.equal(receipt.checks.ancestry_monotonic, true);
+    assert.equal(receipt.usage.profiles.builder.calls, 1);
+    assert.equal(receipt.budgets.state.attempts.builder, 1);
+    assert.equal(receipt.budgets.state.attempts.reviewer, 0);
+    assert.equal(git(fixture.project, ["status", "--porcelain=v1"]), "");
   } finally {
     removeTree(fixture.root);
   }

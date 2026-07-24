@@ -543,9 +543,21 @@ export async function runProject({
         env: safeGitEnv(env),
       });
       receipt.ancestry_ok = ancestry.status === 0;
+      receipt.checks.branch_locked = finalAuthority.branch === branch;
+      receipt.checks.ancestry_monotonic = receipt.ancestry_ok;
     } catch {
       receipt.branch_after ||= null;
       receipt.head_after ||= null;
+    }
+    try {
+      receipt.checks.clean_after =
+        gitStatus(
+          projectRoot,
+          "Final failure-path Git status check",
+          env,
+        ).length === 0;
+    } catch {
+      receipt.checks.clean_after = false;
     }
     if (!receipt.usage) {
       try {
@@ -556,6 +568,12 @@ export async function runProject({
           message: redact(error.message, secret),
         };
       }
+    }
+    if (receipt.usage) {
+      receipt.checks.builder_usage_present =
+        (receipt.usage.profiles.builder?.calls || 0) > 0;
+      receipt.checks.reviewer_usage_present =
+        (receipt.usage.profiles.reviewer?.calls || 0) > 0;
     }
     try {
       receipt.budgets.state = readRunBudget({ budgetPath: budget.statePath, projectRoot });

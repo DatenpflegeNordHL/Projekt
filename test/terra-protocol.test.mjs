@@ -26,8 +26,17 @@ function git(project, args) {
   return result.stdout.trim();
 }
 
-function writeFakeCodex(path, agentText = null) {
-  const lines = ['#!/usr/bin/env node'];
+function writeFakeCodex(path, agentText = null, requiredPromptFragments = []) {
+  const lines = [
+    '#!/usr/bin/env node',
+    'import { readFileSync } from "node:fs";',
+    'const prompt = readFileSync(0, "utf8");',
+  ];
+  for (const fragment of requiredPromptFragments) {
+    lines.push(
+      `if (!prompt.includes(${JSON.stringify(fragment)})) process.exit(41);`,
+    );
+  }
   if (agentText !== null) {
     const event = {
       type: "item.completed",
@@ -40,7 +49,10 @@ function writeFakeCodex(path, agentText = null) {
   chmodSync(path, 0o700);
 }
 
-function fixture({ agentText = null } = {}) {
+function fixture({
+  agentText = null,
+  requiredPromptFragments = [],
+} = {}) {
   const project = realpathSync(
     mkdtempSync(join(tmpdir(), "codexlooper-terra-protocol-")),
   );
@@ -66,7 +78,7 @@ function fixture({ agentText = null } = {}) {
   mkdirSync(join(project, "docs", "plans"), { recursive: true });
 
   const codex = join(tools, "codex");
-  writeFakeCodex(codex, agentText);
+  writeFakeCodex(codex, agentText, requiredPromptFragments);
 
   writeFileSync(
     join(codexHome, "config.toml"),
@@ -155,6 +167,12 @@ test("retains a private builder patch artifact when host policy rejects it", () 
 `;
   const current = fixture({
     agentText: JSON.stringify({ version: 1, patch, signal: "" }),
+    requiredPromptFragments: [
+      "The read-only filesystem is intentional",
+      "Do not run tests or validation commands inside the model sandbox",
+      "Re-read every existing target file immediately before constructing the final patch",
+      "Never use TASK_FAILED solely because the snapshot is read-only",
+    ],
   });
 
   try {
@@ -185,6 +203,12 @@ test("removes the builder patch artifact after a successful host commit", () => 
 `;
   const current = fixture({
     agentText: JSON.stringify({ version: 1, patch, signal: "" }),
+    requiredPromptFragments: [
+      "The read-only filesystem is intentional",
+      "Do not run tests or validation commands inside the model sandbox",
+      "Re-read every existing target file immediately before constructing the final patch",
+      "Never use TASK_FAILED solely because the snapshot is read-only",
+    ],
   });
 
   try {

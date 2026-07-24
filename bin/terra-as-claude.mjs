@@ -145,17 +145,23 @@ function structuredPatchGuidance(phase) {
       : "Use ALL_TASKS_DONE only when the patch completes every actionable plan item. Otherwise use an empty signal.";
   return `CodexLooper read-only patch policy:
 - You are running inside a disposable read-only clone of the repository. The real project is never writable from this session.
-- Inspect files with read-only shell commands, git status, git diff, and git log. Do not execute commands that create caches, build artifacts, lockfiles, coverage files, or other worktree changes.
+- Inspect files with read-only shell commands, git status, git diff, and git log.
+- The read-only filesystem is intentional. Do not run tests or validation commands inside the model sandbox when they may create temporary files, caches, lockfiles, coverage data, or other writes.
+- Inability to create files or execute write-producing validation inside the snapshot is expected and is not a task blocker. The trusted host performs validation after accepting the patch.
 - Never edit, create, delete, rename, copy, or chmod files. Never run git-mutating commands.
 - Construct the required textual git unified diff directly from the inspected file contents and return it in the patch field. Do not rely on tool-side file changes.
+- Re-read every existing target file immediately before constructing the final patch. Use the exact current content rather than remembered, inferred, previous-commit or prompt-supplied content.
+- Existing-file modification hunks must contain sufficient exact unchanged context. A plan-checkbox hunk must include its task heading and neighboring lines rather than only the checkbox line.
 - Your final response must be one plain JSON object, not markdown. Required fields are patch and signal. Optional fields are version, summary, and overview. No other fields are allowed.
 - patch must be an empty string or a standard textual git unified diff beginning with diff --git lines.
 - signal must be one of: empty string, <<<RALPHEX:ALL_TASKS_DONE>>>, <<<RALPHEX:REVIEW_DONE>>>, or <<<RALPHEX:TASK_FAILED>>> as allowed for the current phase.
 - Use only same-path file additions, deletions, and modifications. Do not emit renames, copies, binary patches, symlinks, submodules, quoted paths, or paths containing whitespace.
 - Every changed path must be permitted by the active plan. For task work, include the plan checkbox update in the patch.
-- The trusted host validates allowed paths, runs git apply --check against the real project, applies the diff, repeats validation commands, and creates the local commit.
+- The trusted host validates allowed paths, runs git apply --check against the real project, applies the diff, runs all focused and repository-wide validation commands, and creates the local commit.
+- Do not mark a task checkbox complete unless the returned patch covers every requirement and required test category for that task. Tests must be authored in the patch even though they cannot be executed inside the read-only model snapshot.
 - ${phaseSignal}
-- Use TASK_FAILED only when the task cannot be completed safely; TASK_FAILED requires an empty patch.
+- Use TASK_FAILED only when the task cannot be completed safely after read-only inspection; TASK_FAILED requires an empty patch.
+- Never use TASK_FAILED solely because the snapshot is read-only, because files cannot be created there, or because write-producing tests cannot be run there.
 - Current phase: ${phase}.`;
 }
 
