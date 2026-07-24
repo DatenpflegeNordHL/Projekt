@@ -196,3 +196,33 @@ test("rolls back an applied patch when validation fails", () => {
     rmSync(current.root, { recursive: true, force: true });
   }
 });
+
+test("runs allowlisted validation without resolving a Git binary from PATH", () => {
+  const current = fixture({ validationCommands: ["git diff --check"] });
+  const binDirectory = mkdtempSync(join(tmpdir(), "codexlooper-fake-git-"));
+  const marker = join(binDirectory, "unexpected-shell-git");
+  try {
+    const fakeGit = join(binDirectory, "git");
+    writeFileSync(fakeGit, `#!/bin/sh\nprintf '%s\\n' invoked > ${JSON.stringify(marker)}\n`);
+    chmodSync(fakeGit, 0o700);
+    const patch = `diff --git a/src/value.mjs b/src/value.mjs
+--- a/src/value.mjs
++++ b/src/value.mjs
+@@ -1 +1 @@
+-export const value = 1;
++export const value = 2;
+`;
+    const result = applyBuilderPatch({
+      patch,
+      phase: "task",
+      sourceEnv: { ...sourceEnv(current), PATH: `${binDirectory}:${process.env.PATH}` },
+      projectRoot: current.root,
+    });
+    assert.equal(result.committed, true);
+    assert.equal(readFileSync(join(current.root, "src", "value.mjs"), "utf8"), "export const value = 2;\n");
+    assert.throws(() => readFileSync(marker, "utf8"), { code: "ENOENT" });
+  } finally {
+    rmSync(current.root, { recursive: true, force: true });
+    rmSync(binDirectory, { recursive: true, force: true });
+  }
+});

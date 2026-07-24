@@ -145,11 +145,11 @@ export function validationInvocation(command, rules) {
   if (tokens[0] === "test") {
     if (tokens.length === 3 && TEST_OPERATORS.has(tokens[1])) {
       const path = validationPath(tokens[2], rules, "test");
-      return { executable: "/usr/bin/test", args: [tokens[1], path], display: command };
+      return { executable: "/bin/test", args: [tokens[1], path], display: command };
     }
     if (tokens.length === 4 && tokens[1] === "!" && tokens[2] === "-e") {
       const path = validationPath(tokens[3], rules, "test ! -e");
-      return { executable: "/usr/bin/test", args: ["!", "-e", path], display: command };
+      return { executable: "/bin/test", args: ["!", "-e", path], display: command };
     }
   }
 

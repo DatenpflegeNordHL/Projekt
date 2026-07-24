@@ -18,7 +18,7 @@ import { assertGitAuthority, readGitAuthority } from "./git-authority.mjs";
 import { ensurePrivateDirectoryChain } from "./runtime-paths.mjs";
 import { parseBudgetLimits, initializeRunBudget, readRunBudget } from "./run-budget.mjs";
 import { parseRunPolicy } from "./run-policy.mjs";
-import { verifyRuntimeManifest } from "./runtime-integrity.mjs";
+import { assertManifestExternalTool, verifyRuntimeManifest } from "./runtime-integrity.mjs";
 import { aggregateUsage, readUsageEvents } from "./telemetry.mjs";
 
 const MAX_PLAN_BYTES = 2_000_000;
@@ -311,9 +311,9 @@ export async function runProject({
 } = {}) {
   if (argv.length !== 1) fail("CODEXLOOPER_PLAN_INVALID", "Exactly one plan path is required");
   const projectRoot = realpathSync(env.CODEXLOOPER_PROJECT || process.cwd());
-  const mexCommand = requiredAbsoluteExecutable(env, "CODEXLOOPER_MEX_COMMAND");
-  const realCodex = requiredAbsoluteExecutable(env, "CODEXLOOPER_REAL_CODEX");
-  const ralphexCommand = requiredAbsoluteExecutable(env, "CODEXLOOPER_RALPHEX_COMMAND");
+  const configuredMexCommand = requiredAbsoluteExecutable(env, "CODEXLOOPER_MEX_COMMAND");
+  const configuredCodexCommand = requiredAbsoluteExecutable(env, "CODEXLOOPER_REAL_CODEX");
+  const configuredRalphexCommand = requiredAbsoluteExecutable(env, "CODEXLOOPER_RALPHEX_COMMAND");
   const runtimeManifest = requiredString(env, "CODEXLOOPER_RUNTIME_MANIFEST");
   const runtimeManifestSha256 = requiredString(env, "CODEXLOOPER_RUNTIME_MANIFEST_SHA256");
   const runtimeDirectory = requiredString(env, "CODEXLOOPER_RUNTIME_DIR");
@@ -328,6 +328,21 @@ export async function runProject({
     expectedRuntimeDirectory: runtimeDirectory,
     expectedNodeExecutable: process.execPath,
   });
+  const mexCommand = assertManifestExternalTool(
+    runtime.manifest,
+    "mex",
+    configuredMexCommand,
+  );
+  const realCodex = assertManifestExternalTool(
+    runtime.manifest,
+    "codex",
+    configuredCodexCommand,
+  );
+  const ralphexCommand = assertManifestExternalTool(
+    runtime.manifest,
+    "ralphex",
+    configuredRalphexCommand,
+  );
   const budgets = parseBudgetLimits(env);
   const plan = validatePlan(projectRoot, argv[0]);
   const policy = parseRunPolicy(plan.relative, plan.content);

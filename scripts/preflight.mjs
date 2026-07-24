@@ -3,7 +3,7 @@ import { isAbsolute, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { assertGitAuthority } from "../src/git-authority.mjs";
-import { verifyRuntimeManifest } from "../src/runtime-integrity.mjs";
+import { assertManifestExternalTool, verifyRuntimeManifest } from "../src/runtime-integrity.mjs";
 
 const THIS_FILE = fileURLToPath(import.meta.url);
 const REQUIRED_ARGUMENTS = ["--project", "--mex-command", "--real-codex", "--ralphex-command"];
@@ -116,15 +116,18 @@ function verifiedRuntime(manifestPath, manifestSha256) {
 export function runPreflight(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const project = realpathSync(resolve(args["--project"]));
-  const mex = args["--mex-command"];
-  const codex = args["--real-codex"];
-  const ralphex = args["--ralphex-command"];
+  const configuredMex = args["--mex-command"];
+  const configuredCodex = args["--real-codex"];
+  const configuredRalphex = args["--ralphex-command"];
   const manifestPath = args["--runtime-manifest"] || process.env.CODEXLOOPER_RUNTIME_MANIFEST;
   const manifestSha256 =
     args["--runtime-manifest-sha256"] || process.env.CODEXLOOPER_RUNTIME_MANIFEST_SHA256;
   if (!manifestPath || !manifestSha256) fail("Immutable runtime manifest evidence is required");
 
   const runtime = verifiedRuntime(manifestPath, manifestSha256);
+  const mex = assertManifestExternalTool(runtime.manifest, "mex", configuredMex);
+  const codex = assertManifestExternalTool(runtime.manifest, "codex", configuredCodex);
+  const ralphex = assertManifestExternalTool(runtime.manifest, "ralphex", configuredRalphex);
   const expectedSourceCommit = process.env.CODEXLOOPER_RUNTIME_SOURCE_COMMIT;
   if (expectedSourceCommit && runtime.manifest.source_commit !== expectedSourceCommit) {
     fail("Runtime source commit does not match the installed launcher");

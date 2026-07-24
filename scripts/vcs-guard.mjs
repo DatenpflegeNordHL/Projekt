@@ -58,17 +58,39 @@ function isBranchCreation(args) {
   return false;
 }
 
-function mutationBlocked(args) {
-  const command = args[0];
-  if (["checkout", "switch", "reset", "rebase", "merge", "cherry-pick", "revert"].includes(command)) {
-    return true;
-  }
-  if (command === "branch") {
-    return args.slice(1).some((arg) =>
-      ["-d", "-D", "-m", "-M", "-c", "-C", "--delete", "--move", "--copy"].includes(arg),
-    );
-  }
-  return false;
+const READ_ONLY_COMMANDS = new Set([
+  "status",
+  "diff",
+  "log",
+  "show",
+  "rev-parse",
+  "ls-files",
+  "merge-base",
+  "cat-file",
+  "check-ignore",
+  "for-each-ref",
+  "describe",
+  "name-rev",
+  "rev-list",
+]);
+const READ_ONLY_BRANCH_OPTIONS = new Set([
+  "-a",
+  "-r",
+  "-v",
+  "-vv",
+  "--all",
+  "--remotes",
+  "--verbose",
+  "--no-color",
+  "--color=never",
+  "--show-current",
+  "--list",
+]);
+
+function readOnlyAllowed(args) {
+  if (READ_ONLY_COMMANDS.has(args[0])) return true;
+  if (args[0] !== "branch") return false;
+  return args.length === 1 || args.slice(1).every((arg) => READ_ONLY_BRANCH_OPTIONS.has(arg));
 }
 
 try {
@@ -97,10 +119,10 @@ try {
     }
     process.stdout.write("CodexLooper trusted host already committed the iteration.\n");
     process.exitCode = 0;
-  } else if (mutationBlocked(args)) {
-    fail(`Ralphex Git mutation is prohibited: git ${args.join(" ")}`);
-  } else {
+  } else if (readOnlyAllowed(args)) {
     delegate(project, args);
+  } else {
+    fail(`Ralphex Git command is not allowlisted: git ${args.join(" ")}`);
   }
 
   if (!process.exitCode) {

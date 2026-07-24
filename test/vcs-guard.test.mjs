@@ -77,3 +77,30 @@ test("read-only Git inspection is delegated", () => {
     rmSync(project, { recursive: true, force: true });
   }
 });
+
+test("blocks unallowlisted mutations and global options before a Git subcommand", () => {
+  const project = fixture();
+  try {
+    for (const args of [
+      ["branch", "unauthorized-branch"],
+      ["branch", "--set-upstream-to=origin/main"],
+      ["tag", "unauthorized-tag"],
+      ["stash"],
+      ["clean", "-fd"],
+      ["apply", "--stat"],
+      ["update-ref", "refs/heads/unauthorized", "HEAD"],
+      ["config", "codexlooper.unauthorized", "true"],
+      ["-C", project, "checkout", "main"],
+    ]) {
+      const result = guard(project, args);
+      assert.equal(result.status, 1, `${args.join(" ")}: ${result.stderr}`);
+      assert.match(result.stderr, /not allowlisted/);
+    }
+    assert.equal(git(project, ["branch", "--list", "unauthorized-branch"]), "");
+    assert.equal(git(project, ["tag", "--list", "unauthorized-tag"]), "");
+    assert.doesNotMatch(git(project, ["config", "--local", "--list"]), /codexlooper\.unauthorized/);
+    assert.equal(git(project, ["branch", "--show-current"]), "main");
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});

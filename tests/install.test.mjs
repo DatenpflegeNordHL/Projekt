@@ -238,6 +238,38 @@ test("preflight validates immutable runtime, MEX, Codex and Ralphex", () => {
   }
 });
 
+test("preflight rejects executable paths that differ from the immutable runtime manifest", () => {
+  const fixture = createFixture();
+  try {
+    const installed = installFixture(fixture);
+    const substitute = executable(
+      join(fixture.root, "substitute-tool"),
+      "#!/bin/sh\necho substitute 0.0.0\n",
+    );
+    for (const [flag, label] of [
+      ["--mex-command", "mex"],
+      ["--real-codex", "codex"],
+      ["--ralphex-command", "ralphex"],
+    ]) {
+      const args = [
+        "--project", fixture.project,
+        "--mex-command", fixture.mex,
+        "--real-codex", fixture.codex,
+        "--ralphex-command", fixture.ralphex,
+        "--runtime-manifest", installed.runtimeManifest,
+        "--runtime-manifest-sha256", installed.runtimeManifestSha256,
+      ];
+      args[args.indexOf(flag) + 1] = substitute;
+      assert.throws(
+        () => runPreflight(args),
+        (error) => error.code === "CODEXLOOPER_RUNTIME_INTEGRITY_FAILED" && error.message.includes(label),
+      );
+    }
+  } finally {
+    removeTree(fixture.root);
+  }
+});
+
 test("runtime tampering blocks preflight before any model execution", () => {
   const fixture = createFixture();
   try {

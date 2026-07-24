@@ -35,7 +35,7 @@ test("parses exact and prefix path rules plus allowlisted validation commands", 
     display: "git diff --check",
   });
   assert.deepEqual(validationInvocation("test ! -e artifact.txt", policy.allowed_paths), {
-    executable: "/usr/bin/test",
+    executable: "/bin/test",
     args: ["!", "-e", "artifact.txt"],
     display: "test ! -e artifact.txt",
   });

@@ -117,6 +117,25 @@ export function canonicalExecutable(path, label) {
   };
 }
 
+export function assertManifestExternalTool(manifest, name, suppliedPath) {
+  const expected = manifest?.external_tools?.[name];
+  if (
+    !expected ||
+    typeof expected.path !== "string" ||
+    typeof expected.sha256 !== "string"
+  ) {
+    fail("CODEXLOOPER_RUNTIME_MANIFEST_INVALID", `Runtime manifest has no valid ${name} executable record`);
+  }
+  const actual = canonicalExecutable(suppliedPath, `${name} executable`);
+  if (actual.path !== expected.path || actual.sha256 !== expected.sha256) {
+    fail(
+      "CODEXLOOPER_RUNTIME_INTEGRITY_FAILED",
+      `Runtime ${name} executable does not match the immutable manifest`,
+    );
+  }
+  return actual.path;
+}
+
 function sourceFileRecord(sourceRoot, relativePath) {
   const safe = safeRelativePath(relativePath, "Runtime source path");
   const path = resolve(sourceRoot, safe);

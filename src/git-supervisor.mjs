@@ -8,7 +8,7 @@ import {
 import { spawnSync } from "node:child_process";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { assertGitAuthorityFromEnvironment } from "./git-authority.mjs";
-import { pathAllowed } from "./run-policy.mjs";
+import { pathAllowed, validationInvocation } from "./run-policy.mjs";
 
 const SAFE_ENV_KEYS = [
   "HOME",
@@ -159,15 +159,16 @@ function validatePaths(paths, rules) {
   }
 }
 
-function runValidationCommands(projectRoot, commands, sourceEnv) {
+function runValidationCommands(projectRoot, commands, rules, sourceEnv) {
   const results = [];
   for (const command of commands) {
+    const invocation = validationInvocation(command, rules);
     authority(projectRoot, sourceEnv, `Before validation command ${JSON.stringify(command)}`);
     const started = Date.now();
-    run("/bin/sh", ["-c", command], {
+    run(invocation.executable, invocation.args, {
       cwd: projectRoot,
       env: safeEnvironment(sourceEnv),
-      label: `Validation command ${JSON.stringify(command)}`,
+      label: `Validation command ${JSON.stringify(invocation.display)}`,
       timeout: VALIDATION_TIMEOUT_MS,
     });
     authority(projectRoot, sourceEnv, `After validation command ${JSON.stringify(command)}`);
@@ -184,7 +185,12 @@ function recordEvent(policyPath, event) {
 
 function commitPaths({ root, paths, policy, policyPath, phase, sourceEnv, now, transport }) {
   authority(root, sourceEnv, "Before host validation");
-  const validation = runValidationCommands(root, policy.validation_commands, sourceEnv);
+  const validation = runValidationCommands(
+    root,
+    policy.validation_commands,
+    policy.allowed_paths,
+    sourceEnv,
+  );
   authority(root, sourceEnv, "Before host staging");
   run("/usr/bin/git", ["add", "--all", "--", ...paths], {
     cwd: root,
