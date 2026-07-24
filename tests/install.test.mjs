@@ -436,6 +436,11 @@ test("generated runner preserves branch, enforces budgets and archives plan thro
     assert.doesNotMatch(JSON.stringify(receipt), /closerouter_test_secret|OPENAI_API_KEY|GITHUB_TOKEN/);
     const hostEvents = readFileSync(join(runDirectory, "host-commits.jsonl"), "utf8");
     assert.match(hostEvents, /"transport":"structured_patch"/);
+    assert.match(hostEvents, /"completion_gates":\{"required":true/);
+    assert.match(hostEvents, /"command":"npm run check","status":"PASS"/);
+    assert.match(hostEvents, /"command":"runtime-integrity verification","status":"PASS"/);
+    assert.match(hostEvents, /"command":"branch-lock and ancestry verification","status":"PASS"/);
+    assert.match(hostEvents, /"command":"clean-worktree verification","status":"PASS"/);
     assert.match(hostEvents, /"transport":"host_plan_archive"/);
   } finally {
     removeTree(fixture.root);
