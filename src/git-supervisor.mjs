@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { assertGitAuthorityFromEnvironment } from "./git-authority.mjs";
 import { pathAllowed, validationInvocation } from "./run-policy.mjs";
+import { assertManifestExternalTool, verifyRuntimeManifest } from "./runtime-integrity.mjs";
 
 const SAFE_ENV_KEYS = [
   "HOME",
@@ -184,6 +185,119 @@ function runValidationCommands(projectRoot, commands, rules, sourceEnv) {
   return results;
 }
 
+function runtimeNpmCli(sourceEnv) {
+  const manifestPath = sourceEnv.CODEXLOOPER_RUNTIME_MANIFEST;
+  const manifestSha256 = sourceEnv.CODEXLOOPER_RUNTIME_MANIFEST_SHA256;
+  const runtimeDirectory = sourceEnv.CODEXLOOPER_RUNTIME_DIR;
+  const configured = [manifestPath, manifestSha256, runtimeDirectory].filter(Boolean).length;
+  if (configured === 0) return null;
+  if (configured !== 3) {
+    fail("CODEXLOOPER_COMPLETION_GATE_RUNTIME_INVALID", "Completion gates require complete runtime evidence");
+  }
+  const npmCli = sourceEnv.CODEXLOOPER_NPM_CLI;
+  if (typeof npmCli !== "string" || !isAbsolute(npmCli) || npmCli.includes("\0")) {
+    fail("CODEXLOOPER_COMPLETION_GATE_NPM_INVALID", "Completion gates require a pinned npm CLI path");
+  }
+  const runtime = verifyRuntimeManifest({
+    manifestPath,
+    expectedManifestSha256: manifestSha256,
+    expectedRuntimeDirectory: runtimeDirectory,
+    expectedNodeExecutable: process.execPath,
+  });
+  return assertManifestExternalTool(runtime.manifest, "npm_cli", npmCli);
+}
+
+function completedTaskLabels(diff) {
+  const unchecked = new Set();
+  const checked = new Set();
+  for (const line of diff.split("\n")) {
+    const removed = line.match(/^-\s*-\s+\[ \]\s+(.+)$/);
+    if (removed) unchecked.add(removed[1]);
+    const added = line.match(/^\+\s*-\s+\[x\]\s+(.+)$/i);
+    if (added) checked.add(added[1]);
+  }
+  return [...unchecked].filter((label) => checked.has(label));
+}
+
+function pendingTaskCompletion(projectRoot, plan, sourceEnv) {
+  const diff = run("/usr/bin/git", ["diff", "--no-ext-diff", "--unified=0", "HEAD", "--", plan], {
+    cwd: projectRoot,
+    env: safeEnvironment(sourceEnv),
+    label: "Task completion diff inspection",
+  });
+  return completedTaskLabels(diff);
+}
+
+function assertStagedCandidate(projectRoot, paths) {
+  const unstaged = gitPaths(projectRoot, ["diff", "--name-only", "-z"]);
+  const untracked = gitPaths(projectRoot, ["ls-files", "--others", "--exclude-standard", "-z"]);
+  const staged = gitPaths(projectRoot, ["diff", "--cached", "--name-only", "-z"]);
+  if (unstaged.length > 0 || untracked.length > 0 || !samePaths(staged, [...paths].sort())) {
+    fail(
+      "CODEXLOOPER_COMPLETION_GATE_DIRTY",
+      "Completion gates require only the expected candidate changes to be staged",
+    );
+  }
+}
+
+function assertPinnedNpmContract(projectRoot, sourceEnv) {
+  const baseline = run("/usr/bin/git", ["rev-parse", "HEAD:package.json"], {
+    cwd: projectRoot,
+    env: safeEnvironment(sourceEnv),
+    label: "Completion npm contract baseline",
+  });
+  const current = run("/usr/bin/git", ["hash-object", "--", "package.json"], {
+    cwd: projectRoot,
+    env: safeEnvironment(sourceEnv),
+    label: "Completion npm contract current package.json",
+  });
+  if (current !== baseline) {
+    fail(
+      "CODEXLOOPER_COMPLETION_GATE_NPM_INVALID",
+      "Completion gates require package.json to remain unchanged from HEAD",
+    );
+  }
+}
+
+function runCompletionGates({ projectRoot, paths, plan, sourceEnv, validation }) {
+  const labels = pendingTaskCompletion(projectRoot, plan, sourceEnv);
+  if (labels.length === 0) return { required: false, checks: [] };
+
+  const npmCli = runtimeNpmCli(sourceEnv);
+  if (!npmCli) return { required: false, legacy: true, checks: [] };
+
+  const checks = validation.map((entry) => ({ ...entry, gate: "focused_validation" }));
+  authority(projectRoot, sourceEnv, "Before completion gates");
+  assertStagedCandidate(projectRoot, paths);
+  assertPinnedNpmContract(projectRoot, sourceEnv);
+  run("/usr/bin/git", ["diff", "--check"], {
+    cwd: projectRoot,
+    env: safeEnvironment(sourceEnv),
+    label: "Completion gate git diff --check",
+  });
+  checks.push({ command: "git diff --check", status: "PASS" });
+  run("/usr/bin/git", ["diff", "--cached", "--check"], {
+    cwd: projectRoot,
+    env: safeEnvironment(sourceEnv),
+    label: "Completion gate staged git diff --check",
+  });
+  checks.push({ command: "git diff --cached --check", status: "PASS" });
+  run(process.execPath, [npmCli, "run", "check"], {
+    cwd: projectRoot,
+    env: { ...safeEnvironment(sourceEnv), PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
+    label: "Completion gate npm run check",
+    timeout: VALIDATION_TIMEOUT_MS,
+  });
+  checks.push({ command: "npm run check", status: "PASS" });
+  runtimeNpmCli(sourceEnv);
+  checks.push({ command: "runtime-integrity verification", status: "PASS" });
+  authority(projectRoot, sourceEnv, "After completion gates");
+  checks.push({ command: "branch-lock and ancestry verification", status: "PASS" });
+  assertStagedCandidate(projectRoot, paths);
+  checks.push({ command: "clean-worktree verification", status: "PASS" });
+  return { required: true, tasks: labels, checks };
+}
+
 function recordEvent(policyPath, event) {
   const eventPath = resolve(dirname(policyPath), "host-commits.jsonl");
   appendFileSync(eventPath, `${JSON.stringify(event)}\n`, { encoding: "utf8", mode: 0o600 });
@@ -207,6 +321,15 @@ function commitPaths({ root, paths, policy, policyPath, phase, sourceEnv, now, t
   const staged = gitPaths(root, ["diff", "--cached", "--name-only", "-z"]);
   if (staged.length === 0) fail("CODEXLOOPER_HOST_COMMIT_EMPTY", "Builder changes produced no staged files");
   validatePaths(staged, policy.allowed_paths);
+  const completionGates = phase === "task"
+    ? runCompletionGates({
+      projectRoot: root,
+      paths: staged,
+      plan: policy.plan,
+      sourceEnv,
+      validation,
+    })
+    : { required: false, checks: [] };
   authority(root, sourceEnv, "Before host commit");
   const message =
     phase === "task"
@@ -232,10 +355,11 @@ function commitPaths({ root, paths, policy, policyPath, phase, sourceEnv, now, t
     commit,
     changed_paths: staged,
     validation,
+    completion_gates: completionGates,
     branch: sourceEnv.CODEXLOOPER_EXPECTED_BRANCH || null,
     run_start_sha: sourceEnv.CODEXLOOPER_RUN_START_SHA || null,
   });
-  return { committed: true, commit, changed_paths: staged, validation };
+  return { committed: true, commit, changed_paths: staged, validation, completion_gates: completionGates };
 }
 
 function normalizePatch(patch) {
@@ -388,14 +512,21 @@ export function superviseBuilderChanges({
   if (paths.length === 0) return { committed: false, changed_paths: [], validation: [] };
   const { policy, policyPath } = loadPolicy(sourceEnv, root);
   validatePaths(paths, policy.allowed_paths);
-  return commitPaths({
-    root,
-    paths,
-    policy,
-    policyPath,
-    phase,
-    sourceEnv,
-    now,
-    transport: "worktree",
-  });
+  try {
+    return commitPaths({
+      root,
+      paths,
+      policy,
+      policyPath,
+      phase,
+      sourceEnv,
+      now,
+      transport: "worktree",
+    });
+  } catch (error) {
+    if (phase === "task" && pendingTaskCompletion(root, policy.plan, sourceEnv).length > 0) {
+      cleanupAppliedPatch(root, paths, sourceEnv);
+    }
+    throw error;
+  }
 }

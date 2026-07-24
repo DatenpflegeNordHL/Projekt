@@ -313,6 +313,7 @@ export async function runProject({
   const projectRoot = realpathSync(env.CODEXLOOPER_PROJECT || process.cwd());
   const configuredMexCommand = requiredAbsoluteExecutable(env, "CODEXLOOPER_MEX_COMMAND");
   const configuredCodexCommand = requiredAbsoluteExecutable(env, "CODEXLOOPER_REAL_CODEX");
+  const configuredNpmCli = requiredAbsoluteExecutable(env, "CODEXLOOPER_NPM_CLI");
   const configuredRalphexCommand = requiredAbsoluteExecutable(env, "CODEXLOOPER_RALPHEX_COMMAND");
   const runtimeManifest = requiredString(env, "CODEXLOOPER_RUNTIME_MANIFEST");
   const runtimeManifestSha256 = requiredString(env, "CODEXLOOPER_RUNTIME_MANIFEST_SHA256");
@@ -337,6 +338,11 @@ export async function runProject({
     runtime.manifest,
     "codex",
     configuredCodexCommand,
+  );
+  const npmCli = assertManifestExternalTool(
+    runtime.manifest,
+    "npm_cli",
+    configuredNpmCli,
   );
   const ralphexCommand = assertManifestExternalTool(
     runtime.manifest,
@@ -467,6 +473,7 @@ export async function runProject({
       CODEXLOOPER_RUN_DIR: runDirectory,
       CODEXLOOPER_RUN_POLICY: policyPath,
       CODEXLOOPER_BUDGET_PATH: budget.statePath,
+      CODEXLOOPER_NPM_CLI: npmCli,
       CODEXLOOPER_PROJECT: projectRoot,
       CODEXLOOPER_EXPECTED_PROJECT_ROOT: projectRoot,
       CODEXLOOPER_EXPECTED_BRANCH: branch,

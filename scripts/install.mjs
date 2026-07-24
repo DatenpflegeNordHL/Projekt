@@ -229,6 +229,7 @@ function runtimeExports(runtime, budgets) {
 
 function wrapperScript({
   realCodex,
+  npmCli,
   codexHome,
   allowedModels,
   builderModel,
@@ -239,12 +240,13 @@ function wrapperScript({
   runtime,
   budgets,
 }) {
-  return `#!/bin/sh\nset -eu\nexport CODEXLOOPER_REAL_CODEX=${shellQuote(realCodex)}\nexport CODEX_HOME=${shellQuote(codexHome)}\nexport CODEXLOOPER_ALLOWED_MODELS=${shellQuote(allowedModels)}\nexport CODEXLOOPER_BUILDER_MODEL=${shellQuote(builderModel)}\nexport CODEXLOOPER_REVIEW_MODEL=${shellQuote(reviewModel)}\nexport CODEXLOOPER_BUILDER_REASONING=${shellQuote(builderReasoning)}\nexport CODEXLOOPER_REVIEW_REASONING=${shellQuote(reviewReasoning)}\n${runtimeExports(runtime, budgets)}\nexec ${shellQuote(process.execPath)} ${shellQuote(entrypoint)} "$@"\n`;
+  return `#!/bin/sh\nset -eu\nexport CODEXLOOPER_REAL_CODEX=${shellQuote(realCodex)}\nexport CODEXLOOPER_NPM_CLI=${shellQuote(npmCli)}\nexport CODEX_HOME=${shellQuote(codexHome)}\nexport CODEXLOOPER_ALLOWED_MODELS=${shellQuote(allowedModels)}\nexport CODEXLOOPER_BUILDER_MODEL=${shellQuote(builderModel)}\nexport CODEXLOOPER_REVIEW_MODEL=${shellQuote(reviewModel)}\nexport CODEXLOOPER_BUILDER_REASONING=${shellQuote(builderReasoning)}\nexport CODEXLOOPER_REVIEW_REASONING=${shellQuote(reviewReasoning)}\n${runtimeExports(runtime, budgets)}\nexec ${shellQuote(process.execPath)} ${shellQuote(entrypoint)} "$@"\n`;
 }
 
 function runWrapperScript({
   project,
   realCodex,
+  npmCli,
   mexCommand,
   ralphexCommand,
   builderModel,
@@ -255,7 +257,7 @@ function runWrapperScript({
   budgets,
 }) {
   const runner = resolve(runtime.runtimeDirectory, "scripts", "run.mjs");
-  return `#!/bin/sh\nset -eu\ncd ${shellQuote(project)}\nexport CODEXLOOPER_PROJECT=${shellQuote(project)}\nexport CODEXLOOPER_REAL_CODEX=${shellQuote(realCodex)}\nexport CODEXLOOPER_MEX_COMMAND=${shellQuote(mexCommand)}\nexport CODEXLOOPER_RALPHEX_COMMAND=${shellQuote(ralphexCommand)}\nexport CODEXLOOPER_BUILDER_MODEL=${shellQuote(builderModel)}\nexport CODEXLOOPER_REVIEW_MODEL=${shellQuote(reviewModel)}\nexport CODEXLOOPER_BUILDER_REASONING=${shellQuote(builderReasoning)}\nexport CODEXLOOPER_REVIEW_REASONING=${shellQuote(reviewReasoning)}\n${runtimeExports(runtime, budgets)}\nexec ${shellQuote(process.execPath)} ${shellQuote(runner)} "$@"\n`;
+  return `#!/bin/sh\nset -eu\ncd ${shellQuote(project)}\nexport CODEXLOOPER_PROJECT=${shellQuote(project)}\nexport CODEXLOOPER_REAL_CODEX=${shellQuote(realCodex)}\nexport CODEXLOOPER_NPM_CLI=${shellQuote(npmCli)}\nexport CODEXLOOPER_MEX_COMMAND=${shellQuote(mexCommand)}\nexport CODEXLOOPER_RALPHEX_COMMAND=${shellQuote(ralphexCommand)}\nexport CODEXLOOPER_BUILDER_MODEL=${shellQuote(builderModel)}\nexport CODEXLOOPER_REVIEW_MODEL=${shellQuote(reviewModel)}\nexport CODEXLOOPER_BUILDER_REASONING=${shellQuote(builderReasoning)}\nexport CODEXLOOPER_REVIEW_REASONING=${shellQuote(reviewReasoning)}\n${runtimeExports(runtime, budgets)}\nexec ${shellQuote(process.execPath)} ${shellQuote(runner)} "$@"\n`;
 }
 
 function vcsWrapperScript({ project, runtime, budgets }) {
@@ -269,6 +271,7 @@ export function install(argv = process.argv.slice(2)) {
   const realCodex = canonicalExecutable(args["--real-codex"], "Codex command").path;
   const mexCommand = canonicalExecutable(args["--mex-command"], "MEX command").path;
   const ralphexCommand = canonicalExecutable(args["--ralphex-command"], "Ralphex command").path;
+  const npmCli = canonicalExecutable(resolve(dirname(process.execPath), "npm"), "npm CLI").path;
   const builderModel = args["--builder-model"];
   const reviewModel = args["--review-model"];
   const builderReasoning = args["--builder-reasoning"];
@@ -313,6 +316,7 @@ export function install(argv = process.argv.slice(2)) {
     externalTools: {
       codex: { path: realCodex, version: codexVersionText },
       mex: { path: mexCommand, version: mexVersionText },
+      npm_cli: { path: npmCli, version: process.versions.npm || null },
       ralphex: { path: ralphexCommand, version: ralphexVersionText },
     },
     budgets,
@@ -332,6 +336,7 @@ export function install(argv = process.argv.slice(2)) {
   const allowedModels = `${builderModel},${reviewModel}`;
   const wrapperOptions = {
     realCodex,
+    npmCli,
     codexHome,
     allowedModels,
     builderModel,
@@ -375,6 +380,7 @@ export function install(argv = process.argv.slice(2)) {
     runWrapperScript({
       project,
       realCodex,
+      npmCli,
       mexCommand,
       ralphexCommand,
       builderModel,
@@ -391,6 +397,7 @@ export function install(argv = process.argv.slice(2)) {
     version: 3,
     project,
     real_codex: realCodex,
+    npm_cli: npmCli,
     codex_version: codexVersionText,
     mex_command: mexCommand,
     mex_version: mexVersionText,

@@ -90,7 +90,33 @@ test("validates and commits only plan-allowed builder changes", () => {
     const event = readFileSync(resolve(current.runDirectory, "host-commits.jsonl"), "utf8");
     assert.match(event, /"phase":"task"/);
     assert.match(event, /"transport":"worktree"/);
+    assert.match(event, /"completion_gates":\{"required":false,"legacy":true/);
     assert.doesNotMatch(event, /CLOSEROUTER_API_KEY|Bearer/);
+  } finally {
+    rmSync(current.root, { recursive: true, force: true });
+  }
+});
+
+test("rolls back a completed task when trusted completion evidence is incomplete", () => {
+  const current = fixture();
+  try {
+    writeFileSync(join(current.root, "src", "value.mjs"), "export const value = 2;\n");
+    const planPath = join(current.root, "docs", "plans", "feature.md");
+    writeFileSync(planPath, readFileSync(planPath, "utf8").replace("- [ ] Update", "- [x] Update"));
+    assert.throws(
+      () => superviseBuilderChanges({
+        phase: "task",
+        sourceEnv: {
+          ...sourceEnv(current),
+          CODEXLOOPER_RUNTIME_MANIFEST: "/incomplete/manifest.json",
+        },
+        projectRoot: current.root,
+      }),
+      (error) => error.code === "CODEXLOOPER_COMPLETION_GATE_RUNTIME_INVALID",
+    );
+    assert.equal(git(current.root, ["status", "--porcelain=v1"]), "");
+    assert.equal(readFileSync(planPath, "utf8").includes("- [ ] Update"), true);
+    assert.equal(git(current.root, ["rev-list", "--count", "HEAD"]), "1");
   } finally {
     rmSync(current.root, { recursive: true, force: true });
   }
