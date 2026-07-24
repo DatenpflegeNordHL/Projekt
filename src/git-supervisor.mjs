@@ -46,6 +46,13 @@ const FORBIDDEN_PATCH_MARKERS = [
   "new file mode 160000",
   "deleted file mode 160000",
 ];
+const APPLY_PATCH_MARKERS = [
+  "*** Begin Patch",
+  "*** Add File:",
+  "*** Update File:",
+  "*** Delete File:",
+  "*** End Patch",
+];
 
 function fail(code, message) {
   const error = new Error(message);
@@ -238,6 +245,15 @@ function normalizePatch(patch) {
   }
   const normalized = patch.replaceAll("\r\n", "\n");
   if (!normalized.trim()) return "";
+  const marker = normalized.split("\n").find((line) =>
+    APPLY_PATCH_MARKERS.some((value) => line === value || line.startsWith(value)),
+  );
+  if (marker) {
+    fail(
+      "CODEXLOOPER_PATCH_DIALECT_MIXED",
+      "Builder patch must be a pure Git unified diff: no Apply-Patch markers; every file block needs diff --git; inspect the entire patch for these markers and rewrite the complete patch before responding.",
+    );
+  }
   if (!normalized.startsWith("diff --git ")) {
     fail("CODEXLOOPER_PATCH_INVALID", "Builder patch must begin with a git diff header");
   }

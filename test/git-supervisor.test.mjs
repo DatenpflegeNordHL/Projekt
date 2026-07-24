@@ -29,6 +29,7 @@ function fixture({ validationCommands = ["node --check src/value.mjs"] } = {}) {
   mkdirSync(join(root, ".git", "info"), { recursive: true });
   writeFileSync(join(root, ".git", "info", "exclude"), ".codexlooper/\n.ralphex/\n");
   writeFileSync(join(root, "src", "value.mjs"), "export const value = 1;\n");
+  writeFileSync(join(root, "src", "marker.txt"), "*** context\nold\n");
   writeFileSync(
     join(root, "docs", "plans", "feature.md"),
     "# Plan\n\n## Allowed paths\n- `src/**`\n- `this plan file`\n\n## Validation Commands\n- `node --check src/value.mjs`\n\n### Task 1: Change\n- [ ] Update value\n",
@@ -192,6 +193,73 @@ test("rolls back an applied patch when validation fails", () => {
     assert.equal(readFileSync(join(current.root, "src", "value.mjs"), "utf8"), "export const value = 1;\n");
     assert.equal(git(current.root, ["status", "--porcelain=v1"]), "");
     assert.equal(git(current.root, ["rev-list", "--count", "HEAD"]), "1");
+  } finally {
+    rmSync(current.root, { recursive: true, force: true });
+  }
+});
+
+test("rejects pure and mixed Apply-Patch dialects before git apply", () => {
+  const current = fixture();
+  const gitPatch = `diff --git a/src/value.mjs b/src/value.mjs
+--- a/src/value.mjs
++++ b/src/value.mjs
+@@ -1 +1 @@
+-export const value = 1;
++export const value = 2;
+`;
+  try {
+    for (const patch of [
+      `*** Begin Patch
+*** Update File: src/value.mjs
+*** End Patch
+`,
+      `${gitPatch}*** Update File: src/second.mjs
+`,
+      `${gitPatch}diff --git a/src/second.mjs b/src/second.mjs
+*** End Patch
+`,
+    ]) {
+      assert.throws(
+        () => applyBuilderPatch({ patch, phase: "task", sourceEnv: sourceEnv(current), projectRoot: current.root }),
+        (error) =>
+          error.code === "CODEXLOOPER_PATCH_DIALECT_MIXED" &&
+          /no Apply-Patch markers.*every file block needs diff --git.*rewrite the complete patch/u.test(error.message),
+      );
+    }
+    assert.equal(readFileSync(join(current.root, "src", "value.mjs"), "utf8"), "export const value = 1;\n");
+    assert.equal(git(current.root, ["status", "--porcelain=v1"]), "");
+  } finally {
+    rmSync(current.root, { recursive: true, force: true });
+  }
+});
+
+test("accepts a pure multi-file Git diff with literal marker-like source lines", () => {
+  const current = fixture();
+  const patch = `diff --git a/src/marker.txt b/src/marker.txt
+--- a/src/marker.txt
++++ b/src/marker.txt
+@@ -1,2 +1,2 @@
+ *** context
+-old
++*** value
+diff --git a/src/value.mjs b/src/value.mjs
+--- a/src/value.mjs
++++ b/src/value.mjs
+@@ -1 +1 @@
+-export const value = 1;
++export const value = 2;
+`;
+  try {
+    const result = applyBuilderPatch({
+      patch,
+      phase: "task",
+      sourceEnv: sourceEnv(current),
+      projectRoot: current.root,
+    });
+    assert.equal(result.committed, true);
+    assert.deepEqual(result.changed_paths, ["src/marker.txt", "src/value.mjs"]);
+    assert.equal(readFileSync(join(current.root, "src", "marker.txt"), "utf8"), "*** context\n*** value\n");
+    assert.equal(git(current.root, ["status", "--porcelain=v1"]), "");
   } finally {
     rmSync(current.root, { recursive: true, force: true });
   }

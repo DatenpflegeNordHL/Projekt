@@ -154,6 +154,7 @@ function structuredPatchGuidance(phase) {
 - Existing-file modification hunks must contain sufficient exact unchanged context. A plan-checkbox hunk must include its task heading and neighboring lines rather than only the checkbox line.
 - Your final response must be one plain JSON object, not markdown. Required fields are patch and signal. Optional fields are version, summary, and overview. No other fields are allowed.
 - patch must be an empty string or a standard textual git unified diff beginning with diff --git lines.
+- Never emit Apply-Patch markers (*** Begin Patch, *** Add File:, *** Update File:, *** Delete File:, or *** End Patch). Every file block needs diff --git; before responding, scan the entire patch for these markers and rewrite the complete patch if any appear.
 - signal must be one of: empty string, <<<RALPHEX:ALL_TASKS_DONE>>>, <<<RALPHEX:REVIEW_DONE>>>, or <<<RALPHEX:TASK_FAILED>>> as allowed for the current phase.
 - Use only same-path file additions, deletions, and modifications. Do not emit renames, copies, binary patches, symlinks, submodules, quoted paths, or paths containing whitespace.
 - Every changed path must be permitted by the active plan. For task work, include the plan checkbox update in the patch.

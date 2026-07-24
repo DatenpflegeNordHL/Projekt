@@ -193,6 +193,39 @@ test("retains a private builder patch artifact when host policy rejects it", () 
   }
 });
 
+test("retains a private mixed-dialect patch artifact and gives a rewrite retry", () => {
+  const patch = `diff --git a/src/value.mjs b/src/value.mjs
+--- a/src/value.mjs
++++ b/src/value.mjs
+@@ -1 +1 @@
+-export const value = 1;
++export const value = 2;
+*** End Patch
+`;
+  const current = fixture({
+    agentText: JSON.stringify({ version: 1, patch, signal: "" }),
+    requiredPromptFragments: [
+      "Never emit Apply-Patch markers",
+      "Every file block needs diff --git",
+      "rewrite the complete patch if any appear",
+    ],
+  });
+  try {
+    const result = runAdapter(current);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /no Apply-Patch markers.*every file block needs diff --git.*rewrite the complete patch/u);
+    const artifacts = patchArtifacts(current.runDirectory);
+    assert.equal(artifacts.length, 1);
+    const artifactPath = join(current.runDirectory, artifacts[0]);
+    assert.equal(readFileSync(artifactPath, "utf8"), patch);
+    assert.equal(statSync(artifactPath).mode & 0o777, 0o600);
+    assert.equal(readFileSync(join(current.project, "src", "value.mjs"), "utf8"), "export const value = 1;\n");
+    assert.equal(git(current.project, ["status", "--porcelain=v1"]), "");
+  } finally {
+    rmSync(current.project, { recursive: true, force: true });
+  }
+});
+
 test("removes the builder patch artifact after a successful host commit", () => {
   const patch = `diff --git a/src/value.mjs b/src/value.mjs
 --- a/src/value.mjs
