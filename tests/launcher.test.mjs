@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildChildEnv, parseCodexArgs } from "../src/launcher.mjs";
+import { prepareProfileLaunch } from "../src/profiles.mjs";
 
 const projectRoot = "/tmp/codexlooper-project";
 const baseEnv = {
@@ -18,9 +19,48 @@ function taskArgs(model = "openai/gpt-5.6-terra") {
     "-c",
     "model_reasoning_effort=medium",
     "-c",
-    "stream_idle_timeout_ms=3600000",
+    "stream_idle_timeout_ms=600000",
   ];
 }
+
+test("bounds a stalled model stream to ten minutes", () => {
+  const launch = prepareProfileLaunch("builder", {
+    json: true,
+    sandbox: "read-only",
+    sourceEnv: {
+      ...baseEnv,
+      CLOSEROUTER_API_KEY: "closerouter_test_secret",
+      CODEXLOOPER_REAL_CODEX: "/bin/echo",
+    },
+    projectRoot,
+  });
+
+  assert.equal(
+    launch.args.find((value) =>
+      value.startsWith("stream_idle_timeout_ms="),
+    ),
+    "stream_idle_timeout_ms=600000",
+  );
+
+  const excessive = taskArgs();
+  const timeoutIndex = excessive.indexOf(
+    "stream_idle_timeout_ms=600000",
+  );
+
+  assert.notEqual(timeoutIndex, -1);
+  excessive[timeoutIndex] =
+    "stream_idle_timeout_ms=600001";
+
+  assert.throws(
+    () => parseCodexArgs(
+      excessive,
+      baseEnv,
+      projectRoot,
+    ),
+    (error) =>
+      error.code === "CODEXLOOPER_INVALID_OVERRIDE",
+  );
+});
 
 test("accepts the bounded Ralphex task invocation", () => {
   const parsed = parseCodexArgs(taskArgs(), baseEnv, projectRoot);
@@ -43,7 +83,7 @@ test("accepts the separate Sol multi-agent review invocation", () => {
     "-c",
     "model_reasoning_effort=high",
     "-c",
-    "stream_idle_timeout_ms=3600000",
+    "stream_idle_timeout_ms=600000",
     "--sandbox=read-only",
   ];
   const parsed = parseCodexArgs(args, baseEnv, projectRoot);

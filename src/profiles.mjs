@@ -4,6 +4,7 @@ import { buildChildEnv, resolveRealCodex } from "./launcher.mjs";
 
 const ALLOWED_REASONING = new Set(["low", "medium", "high"]);
 const ALLOWED_SANDBOXES = new Set(["read-only", "workspace-write"]);
+const STREAM_IDLE_TIMEOUT_MS = 600_000;
 
 function fail(code, message) {
   const error = new Error(message);
@@ -109,7 +110,7 @@ export function prepareProfileLaunch(
     "-c",
     `model_reasoning_effort=${values.reasoning}`,
     "-c",
-    "stream_idle_timeout_ms=3600000",
+    `stream_idle_timeout_ms=${STREAM_IDLE_TIMEOUT_MS}`,
   );
 
   return {

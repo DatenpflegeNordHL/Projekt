@@ -29,6 +29,7 @@ const SAFE_ENV_KEYS = [
 
 const ALLOWED_SANDBOXES = new Set(["read-only", "workspace-write"]);
 const ALLOWED_REASONING = new Set(["low", "medium", "high"]);
+const MAX_STREAM_IDLE_TIMEOUT_MS = 600_000;
 
 function fail(code, message) {
   const error = new Error(message);
@@ -102,7 +103,11 @@ function validateOverride(raw, state, sourceEnv, projectRoot) {
         fail("CODEXLOOPER_INVALID_OVERRIDE", "stream_idle_timeout_ms must be an integer");
       }
       const timeout = Number(value);
-      if (!Number.isSafeInteger(timeout) || timeout < 1_000 || timeout > 7_200_000) {
+      if (
+        !Number.isSafeInteger(timeout) ||
+        timeout < 1_000 ||
+        timeout > MAX_STREAM_IDLE_TIMEOUT_MS
+      ) {
         fail("CODEXLOOPER_INVALID_OVERRIDE", "stream_idle_timeout_ms is outside the allowed range");
       }
       state.timeout = timeout;

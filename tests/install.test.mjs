@@ -280,7 +280,7 @@ test("controlled launcher preserves stdin and strips unrelated secrets", () => {
         "-c",
         "model_reasoning_effort=medium",
         "-c",
-        "stream_idle_timeout_ms=3600000",
+        "stream_idle_timeout_ms=600000",
       ],
       { cwd: fixture.project, encoding: "utf8", input: "bounded task prompt", env: modelEnv() },
     );
