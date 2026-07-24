@@ -390,7 +390,7 @@ bounded process execution, raw private report handling, exact no-change
 normalization, strict projection, redaction and focused tests. Do not integrate
 with bootstrap, runner or Sol in this task.
 
-- [x] Task 1 complete.
+- [ ] Task 1 complete.
 
 ### Task 2: Original executable plumbing and receipts
 
