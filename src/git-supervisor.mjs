@@ -572,6 +572,17 @@ function commitPaths({
     }
     authority(root, sourceEnv, "After isolated completion candidate validation");
     completionGates.checks.push({
+      command: "branch-lock and ancestry verification",
+      status: "PASS",
+      exit_code: 0,
+    });
+    assertStagedCandidate(root, staged, sourceEnv);
+    completionGates.checks.push({
+      command: "clean-worktree verification",
+      status: "PASS",
+      exit_code: 0,
+    });
+    completionGates.checks.push({
       command: "candidate tree identity verification",
       status: "PASS",
       exit_code: 0,
