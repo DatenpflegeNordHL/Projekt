@@ -2,11 +2,16 @@ import {
   appendFileSync,
   chmodSync,
   lstatSync,
+  mkdirSync,
+  mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
+  rmSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { assertGitAuthorityFromEnvironment } from "./git-authority.mjs";
 import { pathAllowed, validationInvocation } from "./run-policy.mjs";
 import { assertManifestExternalTool, verifyRuntimeManifest } from "./runtime-integrity.mjs";
@@ -102,10 +107,10 @@ function nulPaths(value) {
     .map((path) => path.replaceAll("\\", "/"));
 }
 
-function gitPaths(projectRoot, args) {
+function gitPaths(projectRoot, args, sourceEnv = process.env) {
   const result = spawnSync("/usr/bin/git", args, {
     cwd: projectRoot,
-    env: safeEnvironment(),
+    env: safeEnvironment(sourceEnv),
     encoding: "buffer",
     maxBuffer: 20 * 1024 * 1024,
   });
@@ -116,11 +121,11 @@ function gitPaths(projectRoot, args) {
   return nulPaths(Buffer.from(result.stdout || "").toString("utf8"));
 }
 
-function changedPaths(projectRoot) {
+function changedPaths(projectRoot, sourceEnv = process.env) {
   const paths = new Set([
-    ...gitPaths(projectRoot, ["diff", "--name-only", "-z"]),
-    ...gitPaths(projectRoot, ["diff", "--cached", "--name-only", "-z"]),
-    ...gitPaths(projectRoot, ["ls-files", "--others", "--exclude-standard", "-z"]),
+    ...gitPaths(projectRoot, ["diff", "--name-only", "-z"], sourceEnv),
+    ...gitPaths(projectRoot, ["diff", "--cached", "--name-only", "-z"], sourceEnv),
+    ...gitPaths(projectRoot, ["ls-files", "--others", "--exclude-standard", "-z"], sourceEnv),
   ]);
   return [...paths].sort();
 }
@@ -228,16 +233,81 @@ function pendingTaskCompletion(projectRoot, plan, sourceEnv) {
   return completedTaskLabels(diff);
 }
 
-function assertStagedCandidate(projectRoot, paths) {
-  const unstaged = gitPaths(projectRoot, ["diff", "--name-only", "-z"]);
-  const untracked = gitPaths(projectRoot, ["ls-files", "--others", "--exclude-standard", "-z"]);
-  const staged = gitPaths(projectRoot, ["diff", "--cached", "--name-only", "-z"]);
+function assertStagedCandidate(projectRoot, paths, sourceEnv = process.env) {
+  const unstaged = gitPaths(projectRoot, ["diff", "--name-only", "-z"], sourceEnv);
+  const untracked = gitPaths(projectRoot, ["ls-files", "--others", "--exclude-standard", "-z"], sourceEnv);
+  const staged = gitPaths(projectRoot, ["diff", "--cached", "--name-only", "-z"], sourceEnv);
   if (unstaged.length > 0 || untracked.length > 0 || !samePaths(staged, [...paths].sort())) {
     fail(
       "CODEXLOOPER_COMPLETION_GATE_DIRTY",
       "Completion gates require only the expected candidate changes to be staged",
     );
   }
+}
+
+function isolatedCandidateEnvironment(candidateRoot) {
+  const home = resolve(candidateRoot, "home");
+  mkdirSync(home, { recursive: false, mode: 0o700 });
+  chmodSync(home, 0o700);
+  return {
+    HOME: home,
+    PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+    LANG: "C",
+    LC_ALL: "C",
+    DO_NOT_TRACK: "1",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
+
+function candidateRoot() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "codexlooper-candidate-")));
+  chmodSync(root, 0o700);
+  if (lstatSync(root).isSymbolicLink()) {
+    fail("CODEXLOOPER_COMPLETION_CANDIDATE_INVALID", "Candidate root must be a canonical private directory");
+  }
+  return root;
+}
+
+function removeCandidateRoot(path) {
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink()) {
+    rmSync(path, { force: true });
+    return;
+  }
+  if (stat.isDirectory()) {
+    chmodSync(path, 0o700);
+    for (const entry of readdirSync(path)) removeCandidateRoot(resolve(path, entry));
+    rmSync(path, { recursive: true, force: true });
+    return;
+  }
+  chmodSync(path, 0o600);
+  rmSync(path, { force: true });
+}
+
+function candidateTree(projectRoot, sourceEnv) {
+  return run("/usr/bin/git", ["rev-parse", "HEAD^{tree}"], {
+    cwd: projectRoot,
+    env: sourceEnv,
+    label: "Candidate tree lookup",
+  });
+}
+
+function patchTaskCompletions(patch, plan) {
+  const header = `diff --git a/${plan} b/${plan}`;
+  const lines = patch.split("\n");
+  const section = [];
+  let found = false;
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      if (found) break;
+      found = line === header;
+      continue;
+    }
+    if (found) section.push(line);
+  }
+  return completedTaskLabels(section.join("\n"));
 }
 
 function assertPinnedNpmContract(projectRoot, sourceEnv) {
@@ -256,6 +326,140 @@ function assertPinnedNpmContract(projectRoot, sourceEnv) {
       "CODEXLOOPER_COMPLETION_GATE_NPM_INVALID",
       "Completion gates require package.json to remain unchanged from HEAD",
     );
+  }
+}
+
+function prepareCompletionCandidate({ root, patch, declared, policy, sourceEnv }) {
+  const start = run("/usr/bin/git", ["rev-parse", "HEAD"], {
+    cwd: root,
+    env: safeEnvironment(sourceEnv),
+    label: "Completion candidate start HEAD",
+  });
+  const temporary = candidateRoot();
+  const candidate = resolve(temporary, "repository");
+  let result;
+  let completed = false;
+  let failure = null;
+  try {
+    const env = isolatedCandidateEnvironment(temporary);
+    run("/usr/bin/git", ["clone", "--no-local", "--no-checkout", "--", root, candidate], {
+      cwd: temporary,
+      env,
+      label: "Completion candidate local clone",
+      timeout: VALIDATION_TIMEOUT_MS,
+    });
+    chmodSync(candidate, 0o700);
+    if (realpathSync(candidate) !== candidate || lstatSync(candidate).isSymbolicLink()) {
+      fail("CODEXLOOPER_COMPLETION_CANDIDATE_INVALID", "Candidate repository must stay inside its private root");
+    }
+    run("/usr/bin/git", ["remote", "remove", "origin"], {
+      cwd: candidate,
+      env,
+      label: "Completion candidate remote removal",
+    });
+    run("/usr/bin/git", ["config", "--local", "core.hooksPath", "/dev/null"], {
+      cwd: candidate,
+      env,
+      label: "Completion candidate hook isolation",
+    });
+    run("/usr/bin/git", ["checkout", "--detach", start], {
+      cwd: candidate,
+      env,
+      label: "Completion candidate checkout",
+    });
+    if (run("/usr/bin/git", ["rev-parse", "HEAD"], { cwd: candidate, env, label: "Completion candidate HEAD" }) !== start) {
+      fail("CODEXLOOPER_COMPLETION_CANDIDATE_INVALID", "Candidate repository did not check out the expected HEAD");
+    }
+    if (run("/usr/bin/git", ["status", "--porcelain=v1"], { cwd: candidate, env, label: "Completion candidate clean checkout" })) {
+      fail("CODEXLOOPER_COMPLETION_CANDIDATE_DIRTY", "Candidate repository is not clean after checkout");
+    }
+    run("/usr/bin/git", ["apply", "--check", "--recount", "--whitespace=error-all", "-"], {
+      cwd: candidate,
+      env,
+      label: "Completion candidate patch check",
+      input: patch,
+    });
+    run("/usr/bin/git", ["apply", "--recount", "--whitespace=error-all", "-"], {
+      cwd: candidate,
+      env,
+      label: "Completion candidate patch apply",
+      input: patch,
+    });
+    const actual = changedPaths(candidate, env);
+    if (!samePaths(actual, declared)) {
+      fail("CODEXLOOPER_PATCH_PATH_MISMATCH", "Candidate patch paths do not match declared diff paths");
+    }
+    validatePaths(actual, policy.allowed_paths);
+    const tasks = pendingTaskCompletion(candidate, policy.plan, env);
+    if (tasks.length === 0) {
+      fail("CODEXLOOPER_COMPLETION_CANDIDATE_INVALID", "Candidate patch did not complete the declared task checkbox");
+    }
+    assertPinnedNpmContract(candidate, env);
+    run("/usr/bin/git", ["add", "--all", "--", ...actual], {
+      cwd: candidate,
+      env,
+      label: "Completion candidate staging",
+    });
+    assertStagedCandidate(candidate, actual, env);
+    run("/usr/bin/git", [
+      "-c", "core.hooksPath=/dev/null",
+      "-c", "user.name=CodexLooper Candidate",
+      "-c", "user.email=candidate@codexlooper.invalid",
+      "commit", "--no-gpg-sign", "--no-verify", "-m", "chore: validate completion candidate",
+    ], {
+      cwd: candidate,
+      env,
+      label: "Completion candidate temporary commit",
+    });
+    if (run("/usr/bin/git", ["status", "--porcelain=v1"], { cwd: candidate, env, label: "Completion candidate pre-check status" })) {
+      fail("CODEXLOOPER_COMPLETION_CANDIDATE_DIRTY", "Candidate repository must be clean before npm run check");
+    }
+    const validation = runValidationCommands(candidate, policy.validation_commands, policy.allowed_paths, env);
+    const checks = validation.map((entry) => ({ ...entry, gate: "focused_validation" }));
+    run("/usr/bin/git", ["diff", "--check", "HEAD^", "HEAD"], {
+      cwd: candidate,
+      env,
+      label: "Completion candidate git diff --check",
+    });
+    checks.push({ command: "git diff HEAD^ HEAD --check", status: "PASS", exit_code: 0 });
+    const npmCli = runtimeNpmCli(sourceEnv);
+    if (!npmCli) {
+      fail("CODEXLOOPER_COMPLETION_GATE_NPM_INVALID", "Completion candidate requires a manifest-bound npm CLI");
+    }
+    run(process.execPath, [npmCli, "run", "check"], {
+      cwd: candidate,
+      env,
+      label: "Completion candidate npm run check",
+      timeout: VALIDATION_TIMEOUT_MS,
+    });
+    checks.push({ command: "npm run check", status: "PASS", exit_code: 0 });
+    runtimeNpmCli(sourceEnv);
+    checks.push({ command: "runtime-integrity verification", status: "PASS", exit_code: 0 });
+    if (run("/usr/bin/git", ["status", "--porcelain=v1"], { cwd: candidate, env, label: "Completion candidate post-check status" })) {
+      fail("CODEXLOOPER_COMPLETION_CANDIDATE_DIRTY", "Candidate checks modified the candidate repository");
+    }
+    result = {
+      required: true,
+      mode: "isolated_candidate_repository",
+      expected_start_sha: start,
+      candidate_tree: candidateTree(candidate, env),
+      tasks,
+      validation,
+      checks,
+      cleanup: "PENDING",
+    };
+    completed = true;
+    return result;
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    try {
+      removeCandidateRoot(temporary);
+      if (result) result.cleanup = "PASS";
+    } catch (error) {
+      if (!failure && completed) fail("CODEXLOOPER_COMPLETION_CANDIDATE_CLEANUP_FAILED", error.message);
+    }
   }
 }
 
@@ -304,9 +508,19 @@ function recordEvent(policyPath, event) {
   chmodSync(eventPath, 0o600);
 }
 
-function commitPaths({ root, paths, policy, policyPath, phase, sourceEnv, now, transport }) {
+function commitPaths({
+  root,
+  paths,
+  policy,
+  policyPath,
+  phase,
+  sourceEnv,
+  now,
+  transport,
+  completionCandidate,
+}) {
   authority(root, sourceEnv, "Before host validation");
-  const validation = runValidationCommands(
+  const validation = completionCandidate?.validation || runValidationCommands(
     root,
     policy.validation_commands,
     policy.allowed_paths,
@@ -321,7 +535,18 @@ function commitPaths({ root, paths, policy, policyPath, phase, sourceEnv, now, t
   const staged = gitPaths(root, ["diff", "--cached", "--name-only", "-z"]);
   if (staged.length === 0) fail("CODEXLOOPER_HOST_COMMIT_EMPTY", "Builder changes produced no staged files");
   validatePaths(staged, policy.allowed_paths);
-  const completionGates = phase === "task"
+  if (
+    phase === "task" &&
+    !completionCandidate &&
+    pendingTaskCompletion(root, policy.plan, sourceEnv).length > 0 &&
+    runtimeNpmCli(sourceEnv)
+  ) {
+    fail(
+      "CODEXLOOPER_COMPLETION_CANDIDATE_REQUIRED",
+      "Task completion with immutable runtime evidence requires an isolated structured patch candidate",
+    );
+  }
+  const completionGates = completionCandidate || (phase === "task"
     ? runCompletionGates({
       projectRoot: root,
       paths: staged,
@@ -329,13 +554,35 @@ function commitPaths({ root, paths, policy, policyPath, phase, sourceEnv, now, t
       sourceEnv,
       validation,
     })
-    : { required: false, checks: [] };
+    : { required: false, checks: [] });
+  if (completionCandidate) {
+    assertStagedCandidate(root, staged, sourceEnv);
+    const finalTree = run("/usr/bin/git", ["write-tree"], {
+      cwd: root,
+      env: safeEnvironment(sourceEnv),
+      label: "Host completion candidate tree",
+    });
+    completionGates.final_tree = finalTree;
+    completionGates.tree_identity_match = finalTree === completionCandidate.candidate_tree;
+    if (!completionGates.tree_identity_match) {
+      fail(
+        "CODEXLOOPER_COMPLETION_CANDIDATE_TREE_MISMATCH",
+        "Host candidate tree does not match the isolated validated candidate tree",
+      );
+    }
+    authority(root, sourceEnv, "After isolated completion candidate validation");
+    completionGates.checks.push({
+      command: "candidate tree identity verification",
+      status: "PASS",
+      exit_code: 0,
+    });
+  }
   authority(root, sourceEnv, "Before host commit");
   const message =
     phase === "task"
       ? "feat: complete CodexLooper task iteration"
       : "fix: apply CodexLooper review findings";
-  run("/usr/bin/git", ["commit", "--no-gpg-sign", "-m", message], {
+  run("/usr/bin/git", ["commit", "--no-gpg-sign", "--no-verify", "-m", message], {
     cwd: root,
     env: safeEnvironment(sourceEnv),
     label: "Host git commit",
@@ -462,6 +709,15 @@ export function applyBuilderPatch({
     label: "Host patch check",
     input: normalizedPatch,
   });
+  const completionCandidate = phase === "task" && patchTaskCompletions(normalizedPatch, policy.plan).length > 0
+    ? prepareCompletionCandidate({
+      root,
+      patch: normalizedPatch,
+      declared,
+      policy,
+      sourceEnv,
+    })
+    : null;
   let applied = false;
   try {
     authority(root, sourceEnv, "Before structured patch apply");
@@ -490,6 +746,7 @@ export function applyBuilderPatch({
       sourceEnv,
       now,
       transport: "structured_patch",
+      completionCandidate,
     });
   } catch (error) {
     if (applied && changedPaths(root).length > 0) cleanupAppliedPatch(root, declared, sourceEnv);
