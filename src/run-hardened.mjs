@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -121,6 +121,81 @@ function writeReceipt(path, receipt, secret) {
 function runId(now, randomBytesImpl) {
   const timestamp = now().toISOString().replace(/[-:.]/g, "");
   return `${timestamp}-${randomBytesImpl(6).toString("hex")}`;
+}
+
+function sha256(content) {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+export function parseRunInvocation(argv) {
+  if (!Array.isArray(argv)) fail("CODEXLOOPER_PLAN_INVALID", "Plan arguments are invalid");
+  if (argv.length === 1 && typeof argv[0] === "string") {
+    return { planPath: argv[0], taskNumber: null };
+  }
+  if (
+    argv.length === 3 &&
+    argv[0] === "--task" &&
+    typeof argv[1] === "string" &&
+    /^[1-9]\d*$/.test(argv[1]) &&
+    Number.isSafeInteger(Number(argv[1])) &&
+    typeof argv[2] === "string"
+  ) {
+    return { planPath: argv[2], taskNumber: Number(argv[1]) };
+  }
+  fail(
+    "CODEXLOOPER_SINGLE_TASK_INVALID",
+    "Use either <plan-path> or --task <positive task number> <plan-path>",
+  );
+}
+
+export function deriveSingleTaskPlan(plan, taskNumber) {
+  if (!Number.isSafeInteger(taskNumber) || taskNumber < 1) {
+    fail("CODEXLOOPER_SINGLE_TASK_INVALID", "Selected task number is invalid");
+  }
+  const taskHeaders = [...plan.content.matchAll(/^### Task ([1-9]\d*):[^\r\n]*$/gm)];
+  const selected = taskHeaders.find((match) => Number(match[1]) === taskNumber);
+  if (!selected) fail("CODEXLOOPER_SINGLE_TASK_INVALID", `Task ${taskNumber} does not exist in the plan`);
+  if (taskHeaders.filter((match) => Number(match[1]) === taskNumber).length !== 1) {
+    fail("CODEXLOOPER_SINGLE_TASK_INVALID", `Task ${taskNumber} is ambiguous in the plan`);
+  }
+
+  const selectedStart = selected.index;
+  const selectedHeaderIndex = taskHeaders.indexOf(selected);
+  const selectedEnd = selectedHeaderIndex + 1 < taskHeaders.length
+    ? taskHeaders[selectedHeaderIndex + 1].index
+    : plan.content.length;
+  const selectedSection = plan.content.slice(selectedStart, selectedEnd);
+  const checkbox = `- [ ] Task ${taskNumber} complete.`;
+  const completedCheckbox = `- [x] Task ${taskNumber} complete.`;
+  if (selectedSection.includes(completedCheckbox)) {
+    fail("CODEXLOOPER_SINGLE_TASK_ALREADY_COMPLETED", `Task ${taskNumber} is already completed`);
+  }
+  if (selectedSection.split(checkbox).length !== 2) {
+    fail("CODEXLOOPER_SINGLE_TASK_INVALID", `Task ${taskNumber} must have exactly one incomplete completion checkbox`);
+  }
+
+  const firstTaskStart = taskHeaders[0].index;
+  const afterTasks = taskHeaders[taskHeaders.length - 1].index +
+    plan.content.slice(taskHeaders[taskHeaders.length - 1].index).indexOf("\n## ");
+  const suffixStart = afterTasks > taskHeaders[taskHeaders.length - 1].index
+    ? afterTasks + 1
+    : plan.content.length;
+  const contract = [
+    "## Single-task execution contract",
+    "",
+    `This derived plan scopes execution to Task ${taskNumber} only.`,
+    `Complete the matching checkbox in the original plan: \`${plan.relative}\`.`,
+    "Do not alter any other task checkbox or task section.",
+    "",
+  ].join("\n");
+  const content = `${plan.content.slice(0, firstTaskStart)}${contract}${selectedSection}${plan.content.slice(suffixStart)}`;
+  const completedPlanContent = plan.content.replace(checkbox, completedCheckbox);
+  return {
+    content,
+    original_plan_sha256: sha256(plan.content),
+    derived_plan_sha256: sha256(content),
+    selected_task_completed_plan_sha256: sha256(completedPlanContent),
+  };
 }
 
 function validatePlan(projectRoot, supplied) {
@@ -309,7 +384,7 @@ export async function runProject({
   now = () => new Date(),
   randomBytesImpl = randomBytes,
 } = {}) {
-  if (argv.length !== 1) fail("CODEXLOOPER_PLAN_INVALID", "Exactly one plan path is required");
+  const invocation = parseRunInvocation(argv);
   const projectRoot = realpathSync(env.CODEXLOOPER_PROJECT || process.cwd());
   const configuredMexCommand = requiredAbsoluteExecutable(env, "CODEXLOOPER_MEX_COMMAND");
   const configuredCodexCommand = requiredAbsoluteExecutable(env, "CODEXLOOPER_REAL_CODEX");
@@ -350,7 +425,8 @@ export async function runProject({
     configuredRalphexCommand,
   );
   const budgets = parseBudgetLimits(env);
-  const plan = validatePlan(projectRoot, argv[0]);
+  const plan = validatePlan(projectRoot, invocation.planPath);
+  const singleTask = invocation.taskNumber === null ? null : deriveSingleTaskPlan(plan, invocation.taskNumber);
   const policy = parseRunPolicy(plan.relative, plan.content);
   ensureCleanTrackedPlan(projectRoot, plan.relative, env);
 
@@ -361,6 +437,22 @@ export async function runProject({
   const runDirectory = privateRunDirectory(projectRoot, id);
   const policyPath = resolve(runDirectory, "policy.json");
   const receiptPath = resolve(runDirectory, "receipt.json");
+  const derivedPlanPath = singleTask ? resolve(runDirectory, `task-${invocation.taskNumber}.md`) : null;
+  const derivedPlanRelative = derivedPlanPath
+    ? relative(projectRoot, derivedPlanPath).split(sep).join("/")
+    : null;
+  if (singleTask) {
+    writeAtomic(derivedPlanPath, singleTask.content, 0o400);
+    Object.assign(policy, {
+      single_task: true,
+      selected_task: invocation.taskNumber,
+      original_plan: plan.relative,
+      original_plan_sha256: singleTask.original_plan_sha256,
+      derived_plan: derivedPlanRelative,
+      derived_plan_sha256: singleTask.derived_plan_sha256,
+      selected_task_completed_plan_sha256: singleTask.selected_task_completed_plan_sha256,
+    });
+  }
   writeAtomic(policyPath, `${JSON.stringify(policy, null, 2)}\n`, 0o600);
   const budget = initializeRunBudget({
     runDirectory,
@@ -375,6 +467,14 @@ export async function runProject({
     status: "running",
     plan: plan.relative,
     completed_plan: plan.completedRelative,
+    ...(singleTask ? {
+      single_task: true,
+      selected_task: invocation.taskNumber,
+      original_plan: plan.relative,
+      original_plan_sha256: singleTask.original_plan_sha256,
+      derived_plan: derivedPlanRelative,
+      derived_plan_sha256: singleTask.derived_plan_sha256,
+    } : {}),
     started_at: started.toISOString(),
     finished_at: null,
     duration_ms: null,
@@ -480,7 +580,7 @@ export async function runProject({
       CODEXLOOPER_RUN_START_SHA: headBefore,
     });
     const remainingMs = Math.max(1, budget.state.deadline_at_ms - Date.now());
-    const exitCode = await spawnRalphex(ralphexCommand, plan.relative, {
+    const exitCode = await spawnRalphex(ralphexCommand, derivedPlanPath || plan.relative, {
       cwd: projectRoot,
       env: childEnv,
       timeoutMs: remainingMs,
@@ -503,15 +603,25 @@ export async function runProject({
       fail("CODEXLOOPER_RUN_INCOMPLETE", "Worktree is dirty before host plan archive");
     }
 
-    archiveCompletedPlan({
-      projectRoot,
-      plan,
-      branch,
-      startSha: headBefore,
-      runDirectory,
-      sourceEnv: { ...env, CODEXLOOPER_RUN_ID: id },
-      now,
-    });
+    if (singleTask) {
+      const currentPlan = readFileSync(plan.absolute, "utf8");
+      if (sha256(currentPlan) !== singleTask.selected_task_completed_plan_sha256) {
+        fail(
+          "CODEXLOOPER_SINGLE_TASK_INCOMPLETE",
+          `Task ${invocation.taskNumber} did not complete without changing other plan content`,
+        );
+      }
+    } else {
+      archiveCompletedPlan({
+        projectRoot,
+        plan,
+        branch,
+        startSha: headBefore,
+        runDirectory,
+        sourceEnv: { ...env, CODEXLOOPER_RUN_ID: id },
+        now,
+      });
+    }
 
     const finalAuthority = assertGitAuthority({
       projectRoot,
@@ -526,7 +636,9 @@ export async function runProject({
     receipt.ancestry_ok = finalAuthority.ancestry_ok;
     receipt.commits_created = countCommits(projectRoot, headBefore, finalAuthority.head, env);
     receipt.checks.clean_after = gitStatus(projectRoot, "Final Git status check", env).length === 0;
-    receipt.checks.plan_completed = existsSync(resolve(projectRoot, plan.completedRelative));
+    receipt.checks.plan_completed = singleTask
+      ? sha256(readFileSync(plan.absolute, "utf8")) === singleTask.selected_task_completed_plan_sha256
+      : existsSync(resolve(projectRoot, plan.completedRelative));
 
     const usageEvents = readUsageEvents(runDirectory);
     receipt.usage = aggregateUsage(usageEvents);
@@ -536,7 +648,9 @@ export async function runProject({
 
     const failures = [];
     if (!receipt.checks.clean_after) failures.push("Worktree is dirty after the run");
-    if (!receipt.checks.plan_completed) failures.push("Plan was not archived by the trusted host");
+    if (!receipt.checks.plan_completed) {
+      failures.push(singleTask ? "Selected task was not completed exactly" : "Plan was not archived by the trusted host");
+    }
     if (receipt.commits_created < 1) failures.push("No trusted-host commit was created");
     if (!receipt.checks.builder_usage_present) failures.push("No Terra usage event was recorded");
     if (!receipt.checks.reviewer_usage_present) failures.push("No Sol usage event was recorded");

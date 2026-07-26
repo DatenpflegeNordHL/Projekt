@@ -10,6 +10,7 @@ import {
   rmSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { assertGitAuthorityFromEnvironment } from "./git-authority.mjs";
@@ -160,6 +161,33 @@ function loadPolicy(sourceEnv, projectRoot) {
     fail("CODEXLOOPER_RUN_POLICY_INVALID", "Run policy schema is invalid");
   }
   return { policy, policyPath };
+}
+
+function sha256(content) {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+function assertSingleTaskPlanState(root, policy) {
+  if (policy.single_task === undefined) return;
+  if (
+    policy.single_task !== true ||
+    !Number.isSafeInteger(policy.selected_task) ||
+    policy.selected_task < 1 ||
+    policy.original_plan !== policy.plan ||
+    !/^[a-f0-9]{64}$/.test(policy.original_plan_sha256 || "") ||
+    !/^[a-f0-9]{64}$/.test(policy.selected_task_completed_plan_sha256 || "") ||
+    !/^[a-f0-9]{64}$/.test(policy.derived_plan_sha256 || "")
+  ) {
+    fail("CODEXLOOPER_SINGLE_TASK_POLICY_INVALID", "Single-task policy metadata is invalid");
+  }
+  const content = readFileSync(resolve(root, policy.plan), "utf8");
+  const actual = sha256(content);
+  if (actual !== policy.original_plan_sha256 && actual !== policy.selected_task_completed_plan_sha256) {
+    fail(
+      "CODEXLOOPER_SINGLE_TASK_PLAN_MUTATION",
+      "Single-task execution may only complete the selected task checkbox in the original plan",
+    );
+  }
 }
 
 function validatePaths(paths, rules) {
@@ -468,6 +496,7 @@ function commitPaths({
   completionCandidate,
 }) {
   authority(root, sourceEnv, "Before host validation");
+  assertSingleTaskPlanState(root, policy);
   const validation = completionCandidate?.validation || runValidationCommands(
     root,
     policy.validation_commands,

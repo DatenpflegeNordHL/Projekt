@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -127,6 +128,18 @@ function planCompleted(projectRoot = process.cwd(), sourceEnv = process.env) {
     fail("Run policy schema is invalid during completion check");
   }
   const plan = readFileSync(resolve(projectRoot, policy.plan), "utf8");
+  if (policy.single_task !== undefined) {
+    if (
+      policy.single_task !== true ||
+      !Number.isSafeInteger(policy.selected_task) ||
+      policy.selected_task < 1 ||
+      policy.original_plan !== policy.plan ||
+      !/^[a-f0-9]{64}$/.test(policy.selected_task_completed_plan_sha256 || "")
+    ) {
+      fail("Single-task policy metadata is invalid during completion check");
+    }
+    return createHash("sha256").update(plan, "utf8").digest("hex") === policy.selected_task_completed_plan_sha256;
+  }
   return !plan.includes("- [ ]");
 }
 

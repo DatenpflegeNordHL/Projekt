@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -36,7 +37,7 @@ function createFixture(
   codexVersion = "0.130.0",
   ralphexVersion = "1.6.0",
   mexVersion = "0.6.3",
-  { ralphexExitAfterBuilder = false } = {},
+  { ralphexExitAfterBuilder = false, taskCount = 1 } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "codexlooper-fixture-"));
   const project = join(root, "project with spaces");
@@ -53,9 +54,13 @@ function createFixture(
     `${JSON.stringify({ private: true, scripts: { check: "node --check check.mjs" } })}\n`,
   );
   writeFileSync(join(project, "check.mjs"), "export const fixtureCheck = true;\n");
+  const extraTasks = Array.from({ length: taskCount - 1 }, (_, index) => {
+    const task = index + 2;
+    return `\n### Task ${task}: Must not run\n- [ ] Task ${task} complete.\n`;
+  }).join("");
   writeFileSync(
     join(project, "docs", "plans", "fixture.md"),
-    "# Plan: Fixture\n\n## Allowed paths\n- `result.txt`\n- `this plan file`\n\n## Validation Commands\n- `test -f docs/plans/fixture.md`\n\n### Task 1: Result\n- [ ] Create result.txt\n",
+    `# Plan: Fixture\n\n## Allowed paths\n- \`result.txt\`\n- \`this plan file\`\n\n## Validation Commands\n- \`test -f docs/plans/fixture.md\`\n\n### Task 1: Result\n- [ ] Create result.txt\n- [ ] Task 1 complete.\n${extraTasks}`,
   );
 
   const fakeCodexSource = join(tools, "fake-codex.mjs");
@@ -71,10 +76,40 @@ if (!process.env.CLOSEROUTER_API_KEY) process.exit(31);
 if (process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.GITHUB_TOKEN) process.exit(32);
 const args = process.argv.slice(2);
 const modelArg = args.find((value) => value.startsWith('model="')) || "model=unknown";
+const prompt = readFileSync(0, "utf8");
+const singleTask = /\\.codexlooper\\/runs\\/.*\\/task-1\\.md/.test(prompt);
 let text;
 if (modelArg.includes("gpt-5.6-sol")) {
   text = "NO ISSUES FOUND";
 } else if (readFileSync("docs/plans/fixture.md", "utf8").includes("- [ ]")) {
+  const planPatch = singleTask
+    ? [
+      "diff --git a/docs/plans/fixture.md b/docs/plans/fixture.md",
+      "--- a/docs/plans/fixture.md",
+      "+++ b/docs/plans/fixture.md",
+      "@@ -9,7 +9,7 @@",
+      " ",
+      " ### Task 1: Result",
+      " - [ ] Create result.txt",
+      "-- [ ] Task 1 complete.",
+      "+- [x] Task 1 complete.",
+      " ",
+      " ### Task 2: Must not run",
+      " - [ ] Task 2 complete.",
+      "",
+    ]
+    : [
+      "diff --git a/docs/plans/fixture.md b/docs/plans/fixture.md",
+      "--- a/docs/plans/fixture.md",
+      "+++ b/docs/plans/fixture.md",
+      "@@ -10,3 +10,3 @@",
+      " ### Task 1: Result",
+      "-- [ ] Create result.txt",
+      "-- [ ] Task 1 complete.",
+      "+- [x] Create result.txt",
+      "+- [x] Task 1 complete.",
+      "",
+    ];
   const patch = [
     "diff --git a/result.txt b/result.txt",
     "new file mode 100644",
@@ -82,14 +117,7 @@ if (modelArg.includes("gpt-5.6-sol")) {
     "+++ b/result.txt",
     "@@ -0,0 +1 @@",
     "+fixture-pass",
-    "diff --git a/docs/plans/fixture.md b/docs/plans/fixture.md",
-    "--- a/docs/plans/fixture.md",
-    "+++ b/docs/plans/fixture.md",
-    "@@ -10,2 +10,2 @@",
-    " ### Task 1: Result",
-    "-- [ ] Create result.txt",
-    "+- [x] Create result.txt",
-    "",
+    ...planPatch,
   ].join("\\n");
   text = JSON.stringify({ patch, signal: "<<<RALPHEX:ALL_TASKS_DONE>>>", summary: "Completed fixture through trusted host." });
 } else {
@@ -124,9 +152,11 @@ if [ "\${1:-}" = "--version" ]; then echo 'ralphex ${ralphexVersion}'; exit 0; f
 [ -n "\${CODEXLOOPER_RUN_POLICY:-}" ]
 [ -n "\${CODEXLOOPER_BUDGET_PATH:-}" ]
 [ -n "\${CODEXLOOPER_EXPECTED_BRANCH:-}" ]
+[ "\$#" -eq 1 ]
+printf '%s\n' "\$1" > "\${CODEXLOOPER_RUN_DIR}/ralphex-plan-path"
 terra="$(sed -n 's/^claude_command = //p' .ralphex/config)"
 sol="$(sed -n 's/^custom_review_script = //p' .ralphex/config)"
-printf '%s\n' 'Read the plan file at docs/plans/fixture.md and complete the current task.' | "$terra" --print --output-format stream-json --verbose --dangerously-skip-permissions
+printf 'Read the plan file at %s and complete the current task.\n' "\$1" | "$terra" --print --output-format stream-json --verbose --dangerously-skip-permissions
 ${ralphexExitAfterBuilder ? "exit 23" : ""}
 prompt="\${TMPDIR:-/tmp}/ralphex-custom-prompt-$$.txt"
 umask 077
@@ -442,6 +472,81 @@ test("generated runner preserves branch, enforces budgets and archives plan thro
     assert.match(hostEvents, /"command":"branch-lock and ancestry verification","status":"PASS"/);
     assert.match(hostEvents, /"command":"clean-worktree verification","status":"PASS"/);
     assert.match(hostEvents, /"transport":"host_plan_archive"/);
+  } finally {
+    removeTree(fixture.root);
+  }
+});
+
+test("generated runner exposes only a private selected-task plan to Ralphex", () => {
+  const fixture = createFixture(
+    "0.130.0",
+    "1.6.0",
+    "0.6.3",
+    { taskCount: 2 },
+  );
+  try {
+    const result = installFixture(fixture);
+    const run = spawnSync(result.runCommand, ["--task", "1", "docs/plans/fixture.md"], {
+      cwd: fixture.project,
+      encoding: "utf8",
+      env: modelEnv(),
+      timeout: 120_000,
+    });
+    assert.equal(run.status, 0, run.stderr);
+    assert.match(run.stdout, /CODEXLOOPER_RUN=PASS/);
+    assert.equal(readFileSync(join(fixture.project, "result.txt"), "utf8"), "fixture-pass\n");
+    const originalPlan = readFileSync(join(fixture.project, "docs", "plans", "fixture.md"), "utf8");
+    assert.match(originalPlan, /- \[x\] Task 1 complete\./);
+    assert.match(originalPlan, /- \[ \] Task 2 complete\./);
+    assert.equal(existsSync(join(fixture.project, "docs", "plans", "completed", "fixture.md")), false);
+
+    const runDirectory = onlyRunDirectory(fixture.project);
+    const receipt = JSON.parse(readFileSync(join(runDirectory, "receipt.json"), "utf8"));
+    const policy = JSON.parse(readFileSync(join(runDirectory, "policy.json"), "utf8"));
+    const derivedPlanPath = readFileSync(join(runDirectory, "ralphex-plan-path"), "utf8").trim();
+    assert.equal(receipt.status, "completed");
+    assert.equal(receipt.single_task, true);
+    assert.equal(receipt.selected_task, 1);
+    assert.equal(receipt.original_plan, "docs/plans/fixture.md");
+    assert.equal(receipt.checks.plan_completed, true);
+    assert.equal(policy.single_task, true);
+    assert.equal(policy.selected_task, 1);
+    assert.equal(policy.original_plan, "docs/plans/fixture.md");
+    assert.equal(realpathSync(derivedPlanPath), realpathSync(join(runDirectory, "task-1.md")));
+    assert.notEqual(derivedPlanPath, "docs/plans/fixture.md");
+    const derivedPlan = readFileSync(derivedPlanPath, "utf8");
+    const sha256 = (content) => createHash("sha256").update(content, "utf8").digest("hex");
+    const originalPlanBeforeTask = originalPlan.replace("- [x] Task 1 complete.", "- [ ] Task 1 complete.");
+    assert.equal(receipt.original_plan_sha256, sha256(originalPlanBeforeTask));
+    assert.equal(receipt.derived_plan_sha256, sha256(derivedPlan));
+    assert.equal(policy.original_plan_sha256, receipt.original_plan_sha256);
+    assert.equal(policy.derived_plan_sha256, receipt.derived_plan_sha256);
+    assert.equal(policy.selected_task_completed_plan_sha256, sha256(originalPlan));
+    assert.equal(statSync(derivedPlanPath).mode & 0o777, 0o400);
+    assert.match(derivedPlan, /### Task 1: Result/);
+    assert.doesNotMatch(derivedPlan, /### Task 2: Must not run/);
+    assert.match(derivedPlan, /## Single-task execution contract/);
+    assert.match(derivedPlan, /## Allowed paths/);
+    assert.match(derivedPlan, /## Validation Commands/);
+    assert.equal(git(fixture.project, ["status", "--porcelain=v1"]), "");
+  } finally {
+    removeTree(fixture.root);
+  }
+});
+
+test("generated runner rejects an unknown selected task before Ralphex starts", () => {
+  const fixture = createFixture();
+  try {
+    const result = installFixture(fixture);
+    const run = spawnSync(result.runCommand, ["--task", "2", "docs/plans/fixture.md"], {
+      cwd: fixture.project,
+      encoding: "utf8",
+      env: modelEnv(),
+    });
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /CODEXLOOPER_SINGLE_TASK_INVALID: Task 2 does not exist/);
+    assert.equal(existsSync(join(fixture.project, ".codexlooper", "runs")), false);
+    assert.equal(git(fixture.project, ["status", "--porcelain=v1"]), "");
   } finally {
     removeTree(fixture.root);
   }
