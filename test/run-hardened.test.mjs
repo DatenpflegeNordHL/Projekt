@@ -53,6 +53,11 @@ test("single-task plan keeps global contract and exactly one selected task", () 
   assert.match(derived.content, /## Allowed paths/);
   assert.match(derived.content, /## Validation requirements/);
   assert.match(derived.content, /## Single-task execution contract/);
+  assert.match(derived.content, /private derived plan is execution-only input/i);
+  assert.match(derived.content, /Never patch, modify, add, delete, or rename this derived file/i);
+  assert.match(derived.content, /including `task-1\.md`/);
+  assert.match(derived.content, /only permitted plan-file patch target is the canonical original plan: `docs\/plans\/example\.md`/i);
+  assert.match(derived.content, /change exactly `- \[ \] Task 1 complete\.` to `- \[x\] Task 1 complete\.`/);
   assert.match(derived.content, /### Task 1: First task/);
   assert.doesNotMatch(derived.content, /### Task 2: Must not run/);
   assert.doesNotMatch(derived.content, /Task 2 complete/);

@@ -183,8 +183,10 @@ export function deriveSingleTaskPlan(plan, taskNumber) {
   const contract = [
     "## Single-task execution contract",
     "",
-    `This derived plan scopes execution to Task ${taskNumber} only.`,
-    `Complete the matching checkbox in the original plan: \`${plan.relative}\`.`,
+    `This private derived plan is execution-only input for Task ${taskNumber}.`,
+    `Never patch, modify, add, delete, or rename this derived file (including \`task-${taskNumber}.md\`).`,
+    `The only permitted plan-file patch target is the canonical original plan: \`${plan.relative}\`.`,
+    `To complete this task, change exactly \`${checkbox}\` to \`${completedCheckbox}\` in \`${plan.relative}\`.`,
     "Do not alter any other task checkbox or task section.",
     "",
   ].join("\n");

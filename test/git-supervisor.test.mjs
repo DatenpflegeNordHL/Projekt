@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   mkdirSync,
@@ -24,6 +25,7 @@ function fixture({
   validationCommands = ["node --check src/value.mjs"],
   candidateCheck = "node --check src/value.mjs",
   allowPackageJson = false,
+  singleTaskPlan = false,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "codexlooper-supervisor-"));
   mkdirSync(join(root, "src"), { recursive: true });
@@ -36,10 +38,37 @@ function fixture({
   writeFileSync(join(root, "src", "value.mjs"), "export const value = 1;\n");
   writeFileSync(join(root, "src", "marker.txt"), "*** context\nold\n");
   writeFileSync(join(root, "package.json"), `${JSON.stringify({ private: true, scripts: { check: candidateCheck } })}\n`);
-  const packageRule = allowPackageJson ? "- `package.json`\n" : "";
+  const planContent = singleTaskPlan
+    ? `# Plan
+
+## Allowed paths
+- \`src/**\`
+- \`this plan file\`
+
+## Validation Commands
+- \`node --check src/value.mjs\`
+
+### Task 1: Change
+- [ ] Task 1 complete.
+
+### Task 2: Must not run
+- [ ] Task 2 complete.
+`
+    : `# Plan
+
+## Allowed paths
+- \`src/**\`
+${allowPackageJson ? "- `package.json`\n" : ""}- \`this plan file\`
+
+## Validation Commands
+- \`node --check src/value.mjs\`
+
+### Task 1: Change
+- [ ] Update value
+`;
   writeFileSync(
     join(root, "docs", "plans", "feature.md"),
-    `# Plan\n\n## Allowed paths\n- \`src/**\`\n${packageRule}- \`this plan file\`\n\n## Validation Commands\n- \`node --check src/value.mjs\`\n\n### Task 1: Change\n- [ ] Update value\n`,
+    planContent,
   );
   writeFileSync(join(root, "README.md"), "fixture\n");
   git(root, ["add", "."]);
@@ -66,6 +95,27 @@ function fixture({
     { mode: 0o600 },
   );
   return { root, policyPath, runDirectory };
+}
+
+function sha256(content) {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+function configureSingleTaskPolicy(current) {
+  const planPath = join(current.root, "docs", "plans", "feature.md");
+  const original = readFileSync(planPath, "utf8");
+  const completed = original.replace("- [ ] Task 1 complete.", "- [x] Task 1 complete.");
+  const policy = JSON.parse(readFileSync(current.policyPath, "utf8"));
+  Object.assign(policy, {
+    single_task: true,
+    selected_task: 1,
+    original_plan: policy.plan,
+    original_plan_sha256: sha256(original),
+    derived_plan_sha256: "a".repeat(64),
+    selected_task_completed_plan_sha256: sha256(completed),
+  });
+  writeFileSync(current.policyPath, `${JSON.stringify(policy, null, 2)}\n`, { mode: 0o600 });
+  return { planPath, original, completed };
 }
 
 function sourceEnv(current) {
@@ -110,6 +160,71 @@ test("validates and commits only plan-allowed builder changes", () => {
     assert.match(event, /"transport":"worktree"/);
     assert.match(event, /"completion_gates":\{"required":false,"legacy":true/);
     assert.doesNotMatch(event, /CLOSEROUTER_API_KEY|Bearer/);
+  } finally {
+    removeTree(current.root);
+  }
+});
+
+test("rejects a derived task-1.md candidate before applying it", () => {
+  const current = fixture({ singleTaskPlan: true });
+  try {
+    configureSingleTaskPolicy(current);
+    const patch = [
+      "diff --git a/task-1.md b/task-1.md",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/task-1.md",
+      "@@ -0,0 +1 @@",
+      "+must never be patched",
+      "",
+    ].join("\n");
+    assert.throws(
+      () => applyBuilderPatch({ patch, phase: "task", sourceEnv: sourceEnv(current), projectRoot: current.root }),
+      (error) => error.code === "CODEXLOOPER_PATH_POLICY_VIOLATION",
+    );
+    assert.equal(git(current.root, ["status", "--porcelain=v1"]), "");
+    assert.equal(git(current.root, ["rev-list", "--count", "HEAD"]), "1");
+  } finally {
+    removeTree(current.root);
+  }
+});
+
+test("single-task accepts only the canonical Task 1 checkbox state bound by policy", () => {
+  const current = fixture({ singleTaskPlan: true });
+  try {
+    const { planPath, completed } = configureSingleTaskPolicy(current);
+    const patch = generatedPatch(current.root, [
+      { path: "src/value.mjs", content: "export const value = 2;\n" },
+      { path: "docs/plans/feature.md", content: completed },
+    ]);
+    const result = applyBuilderPatch({ patch, phase: "task", sourceEnv: sourceEnv(current), projectRoot: current.root });
+    assert.equal(result.committed, true);
+    assert.equal(readFileSync(planPath, "utf8"), completed);
+    assert.match(readFileSync(planPath, "utf8"), /- \[x\] Task 1 complete\./);
+    assert.match(readFileSync(planPath, "utf8"), /- \[ \] Task 2 complete\./);
+    assert.equal(git(current.root, ["status", "--porcelain=v1"]), "");
+  } finally {
+    removeTree(current.root);
+  }
+});
+
+test("single-task rejects a canonical plan patch that differs from the bound completed hash", () => {
+  const current = fixture({ singleTaskPlan: true });
+  try {
+    const { planPath, original } = configureSingleTaskPolicy(current);
+    const wrongCompletion = original.replace("- [ ] Task 2 complete.", "- [x] Task 2 complete.");
+    const patch = generatedPatch(current.root, [
+      { path: "src/value.mjs", content: "export const value = 2;\n" },
+      { path: "docs/plans/feature.md", content: wrongCompletion },
+    ]);
+    assert.throws(
+      () => applyBuilderPatch({ patch, phase: "task", sourceEnv: sourceEnv(current), projectRoot: current.root }),
+      (error) => error.code === "CODEXLOOPER_SINGLE_TASK_PLAN_MUTATION",
+    );
+    assert.equal(readFileSync(planPath, "utf8"), original);
+    assert.match(readFileSync(planPath, "utf8"), /- \[ \] Task 2 complete\./);
+    assert.equal(git(current.root, ["status", "--porcelain=v1"]), "");
+    assert.equal(git(current.root, ["rev-list", "--count", "HEAD"]), "1");
   } finally {
     removeTree(current.root);
   }

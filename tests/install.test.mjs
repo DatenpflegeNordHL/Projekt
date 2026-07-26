@@ -526,6 +526,10 @@ test("generated runner exposes only a private selected-task plan to Ralphex", ()
     assert.match(derivedPlan, /### Task 1: Result/);
     assert.doesNotMatch(derivedPlan, /### Task 2: Must not run/);
     assert.match(derivedPlan, /## Single-task execution contract/);
+    assert.match(derivedPlan, /execution-only input/i);
+    assert.match(derivedPlan, /Never patch, modify, add, delete, or rename this derived file/i);
+    assert.match(derivedPlan, /including `task-1\.md`/);
+    assert.match(derivedPlan, /only permitted plan-file patch target is the canonical original plan: `docs\/plans\/fixture\.md`/i);
     assert.match(derivedPlan, /## Allowed paths/);
     assert.match(derivedPlan, /## Validation Commands/);
     assert.equal(git(fixture.project, ["status", "--porcelain=v1"]), "");
