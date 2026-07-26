@@ -226,6 +226,39 @@ test("retains a private mixed-dialect patch artifact and gives a rewrite retry",
   }
 });
 
+test("Terra prompt requires a non-mutating final unified-diff check without weakening patch policy", () => {
+  const patch = `diff --git a/src/value.mjs b/src/value.mjs
+--- a/src/value.mjs
++++ b/src/value.mjs
+@@ -1 +1 @@
+-export const value = 1;
++export const value = 2;
+`;
+  const current = fixture({
+    agentText: JSON.stringify({ version: 1, patch, signal: "" }),
+    requiredPromptFragments: [
+      "Sole validation exception: for every non-empty patch",
+      "feed the exact final textual unified diff to `git apply --check`",
+      "exact patch that will be returned",
+      "If the check fails, correct the patch text and check it again",
+      "after a successful check, do not edit the patch",
+      "Do not use `--recount`, `git apply` without `--check`",
+      "any command that writes to the snapshot",
+      "Never edit, create, delete, rename, copy, or chmod files",
+      "Do not run tests or validation commands inside the model sandbox",
+    ],
+  });
+  try {
+    const result = runAdapter(current);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.deepEqual(patchArtifacts(current.runDirectory), []);
+    assert.equal(readFileSync(join(current.project, "src", "value.mjs"), "utf8"), "export const value = 2;\n");
+    assert.equal(git(current.project, ["status", "--porcelain=v1"]), "");
+  } finally {
+    rmSync(current.project, { recursive: true, force: true });
+  }
+});
+
 test("removes the builder patch artifact after a successful host commit", () => {
   const patch = `diff --git a/src/value.mjs b/src/value.mjs
 --- a/src/value.mjs

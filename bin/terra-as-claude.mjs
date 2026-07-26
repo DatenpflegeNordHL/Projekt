@@ -165,6 +165,8 @@ function structuredPatchGuidance(phase) {
 - Construct the required textual git unified diff directly from the inspected file contents and return it in the patch field. Do not rely on tool-side file changes.
 - Re-read every existing target file immediately before constructing the final patch. Use the exact current content rather than remembered, inferred, previous-commit or prompt-supplied content.
 - Existing-file modification hunks must contain sufficient exact unchanged context. A plan-checkbox hunk must include its task heading and neighboring lines rather than only the checkbox line.
+- Sole validation exception: for every non-empty patch, feed the exact final textual unified diff to \`git apply --check\` in this read-only snapshot. The checked text must be the exact patch that will be returned. If the check fails, correct the patch text and check it again; after a successful check, do not edit the patch.
+- Do not use \`--recount\`, \`git apply\` without \`--check\`, or any command that writes to the snapshot for this check. This exception never permits edits, writes, mutating Git commands, or write-producing tests.
 - Your final response must be one plain JSON object, not markdown. Required fields are patch and signal. Optional fields are version, summary, and overview. No other fields are allowed.
 - patch must be an empty string or a standard textual git unified diff beginning with diff --git lines.
 - Never emit Apply-Patch markers (*** Begin Patch, *** Add File:, *** Update File:, *** Delete File:, or *** End Patch). Every file block needs diff --git; before responding, scan the entire patch for these markers and rewrite the complete patch if any appear.
