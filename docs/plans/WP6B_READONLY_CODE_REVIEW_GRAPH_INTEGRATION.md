@@ -382,17 +382,36 @@ declare WP6B complete.
 
 ## Tasks after promotion
 
-### Task 1: Standalone bounded CRG adapter
+### Task 1: Pure CRG contract and projection
 
-Implement complete environment and interpreter verification, executable and path
-validation, isolated child environment, OS sandbox launch, legacy-state guard,
-bounded process execution, raw private report handling, exact no-change
-normalization, strict projection, redaction and focused tests. Do not integrate
-with bootstrap, runner or Sol in this task.
+Implement only the side-effect-free adapter API: the exact normalized result
+form, exact `No changes detected.` normalization, strict bounded advisory
+projection, redaction and focused unit tests. Do not use `spawn`, invoke any CRG
+command or sandbox, construct a child environment, or integrate with bootstrap,
+runner or Sol in this task.
 
 - [ ] Task 1 complete.
 
-### Task 2: Original executable plumbing and receipts
+### Task 2: Sealed adapter foundation
+
+Implement CRG environment, interpreter, command and path identity validation,
+the allowed Python-launcher symlink rules, isolated minimal child-environment
+definition and legacy repository-state guard with focused tests. Do not execute
+CRG commands, launch a sandbox, create reports, or integrate with bootstrap,
+runner or Sol in this task.
+
+- [ ] Task 2 complete.
+
+### Task 3: Bounded standalone execution
+
+Build only on the Task 1 and Task 2 contracts to implement the verified macOS
+sandbox invocation, bounded CRG process execution, timeouts, output and report
+limits, private report storage, repository-mutation checks and all remaining
+adapter tests. Do not integrate with bootstrap, runner or Sol in this task.
+
+- [ ] Task 3 complete.
+
+### Task 4: Original executable plumbing and receipts
 
 Add optional CRG environment, manifest and sandbox identity support to bootstrap,
 install and preflight. Record and re-verify the complete sealed environment,
@@ -401,16 +420,16 @@ run-start SHA and current trusted HEAD. Add secret-free CRG metadata and budget
 state to receipts. Preserve disabled legacy behavior. Do not modify Sol integration
 in this task.
 
-- [ ] Task 2 complete.
+- [ ] Task 4 complete.
 
-### Task 3: Fail-open Sol advisory integration
+### Task 5: Fail-open Sol advisory integration
 
 Build or reuse the graph by exact cache key, run detect, create the strict bounded
 projection and append only that projection to the immutable Runtime A Sol review
 prompt. Preserve normal independent review for every valid CRG runtime failure.
 Update focused tests and documentation.
 
-- [ ] Task 3 complete.
+- [ ] Task 5 complete.
 
 ## Validation requirements
 
