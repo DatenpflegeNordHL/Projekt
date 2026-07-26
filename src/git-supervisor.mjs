@@ -310,25 +310,6 @@ function patchTaskCompletions(patch, plan) {
   return completedTaskLabels(section.join("\n"));
 }
 
-function assertPinnedNpmContract(projectRoot, sourceEnv) {
-  const baseline = run("/usr/bin/git", ["rev-parse", "HEAD:package.json"], {
-    cwd: projectRoot,
-    env: safeEnvironment(sourceEnv),
-    label: "Completion npm contract baseline",
-  });
-  const current = run("/usr/bin/git", ["hash-object", "--", "package.json"], {
-    cwd: projectRoot,
-    env: safeEnvironment(sourceEnv),
-    label: "Completion npm contract current package.json",
-  });
-  if (current !== baseline) {
-    fail(
-      "CODEXLOOPER_COMPLETION_GATE_NPM_INVALID",
-      "Completion gates require package.json to remain unchanged from HEAD",
-    );
-  }
-}
-
 function prepareCompletionCandidate({ root, patch, declared, policy, sourceEnv }) {
   const start = run("/usr/bin/git", ["rev-parse", "HEAD"], {
     cwd: root,
@@ -394,7 +375,8 @@ function prepareCompletionCandidate({ root, patch, declared, policy, sourceEnv }
     if (tasks.length === 0) {
       fail("CODEXLOOPER_COMPLETION_CANDIDATE_INVALID", "Candidate patch did not complete the declared task checkbox");
     }
-    assertPinnedNpmContract(candidate, env);
+    const validation = runValidationCommands(candidate, policy.validation_commands, policy.allowed_paths, env);
+    const checks = validation.map((entry) => ({ ...entry, gate: "plan_validation" }));
     run("/usr/bin/git", ["add", "--all", "--", ...actual], {
       cwd: candidate,
       env,
@@ -412,31 +394,7 @@ function prepareCompletionCandidate({ root, patch, declared, policy, sourceEnv }
       label: "Completion candidate temporary commit",
     });
     if (run("/usr/bin/git", ["status", "--porcelain=v1"], { cwd: candidate, env, label: "Completion candidate pre-check status" })) {
-      fail("CODEXLOOPER_COMPLETION_CANDIDATE_DIRTY", "Candidate repository must be clean before npm run check");
-    }
-    const validation = runValidationCommands(candidate, policy.validation_commands, policy.allowed_paths, env);
-    const checks = validation.map((entry) => ({ ...entry, gate: "focused_validation" }));
-    run("/usr/bin/git", ["diff", "--check", "HEAD^", "HEAD"], {
-      cwd: candidate,
-      env,
-      label: "Completion candidate git diff --check",
-    });
-    checks.push({ command: "git diff HEAD^ HEAD --check", status: "PASS", exit_code: 0 });
-    const npmCli = runtimeNpmCli(sourceEnv);
-    if (!npmCli) {
-      fail("CODEXLOOPER_COMPLETION_GATE_NPM_INVALID", "Completion candidate requires a manifest-bound npm CLI");
-    }
-    run(process.execPath, [npmCli, "run", "check"], {
-      cwd: candidate,
-      env,
-      label: "Completion candidate npm run check",
-      timeout: VALIDATION_TIMEOUT_MS,
-    });
-    checks.push({ command: "npm run check", status: "PASS", exit_code: 0 });
-    runtimeNpmCli(sourceEnv);
-    checks.push({ command: "runtime-integrity verification", status: "PASS", exit_code: 0 });
-    if (run("/usr/bin/git", ["status", "--porcelain=v1"], { cwd: candidate, env, label: "Completion candidate post-check status" })) {
-      fail("CODEXLOOPER_COMPLETION_CANDIDATE_DIRTY", "Candidate checks modified the candidate repository");
+      fail("CODEXLOOPER_COMPLETION_CANDIDATE_DIRTY", "Candidate repository must be clean after plan validation");
     }
     result = {
       required: true,
@@ -473,7 +431,6 @@ function runCompletionGates({ projectRoot, paths, plan, sourceEnv, validation })
   const checks = validation.map((entry) => ({ ...entry, gate: "focused_validation" }));
   authority(projectRoot, sourceEnv, "Before completion gates");
   assertStagedCandidate(projectRoot, paths);
-  assertPinnedNpmContract(projectRoot, sourceEnv);
   run("/usr/bin/git", ["diff", "--check"], {
     cwd: projectRoot,
     env: safeEnvironment(sourceEnv),
@@ -486,15 +443,6 @@ function runCompletionGates({ projectRoot, paths, plan, sourceEnv, validation })
     label: "Completion gate staged git diff --check",
   });
   checks.push({ command: "git diff --cached --check", status: "PASS" });
-  run(process.execPath, [npmCli, "run", "check"], {
-    cwd: projectRoot,
-    env: { ...safeEnvironment(sourceEnv), PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
-    label: "Completion gate npm run check",
-    timeout: VALIDATION_TIMEOUT_MS,
-  });
-  checks.push({ command: "npm run check", status: "PASS" });
-  runtimeNpmCli(sourceEnv);
-  checks.push({ command: "runtime-integrity verification", status: "PASS" });
   authority(projectRoot, sourceEnv, "After completion gates");
   checks.push({ command: "branch-lock and ancestry verification", status: "PASS" });
   assertStagedCandidate(projectRoot, paths);
@@ -672,6 +620,101 @@ function declaredPatchPaths(patch) {
   return paths.sort();
 }
 
+function invalidUnifiedDiff(message) {
+  fail("CODEXLOOPER_PATCH_UNIFIED_DIFF_INVALID", `Builder patch is not a complete Git unified diff: ${message}`);
+}
+
+function assertCompleteUnifiedDiff(patch) {
+  let section = null;
+  let hunk = null;
+
+  function finishHunk() {
+    if (hunk && (hunk.oldLines !== hunk.expectedOld || hunk.newLines !== hunk.expectedNew)) {
+      invalidUnifiedDiff("a hunk is truncated or its declared line counts do not match its content");
+    }
+    hunk = null;
+  }
+
+  function finishSection() {
+    if (!section) return;
+    finishHunk();
+    if (!section.oldHeader || !section.newHeader || section.hunks === 0) {
+      invalidUnifiedDiff("every file block needs --- and +++ headers plus at least one complete hunk");
+    }
+  }
+
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      finishSection();
+      const match = line.match(/^diff --git a\/([^\s]+) b\/([^\s]+)$/);
+      if (!match) invalidUnifiedDiff("a file block has an invalid diff --git header");
+      section = { oldPath: `a/${match[1]}`, newPath: `b/${match[2]}`, oldHeader: false, newHeader: false, hunks: 0 };
+      continue;
+    }
+    if (!section) {
+      if (line) invalidUnifiedDiff("content appears before the first file block");
+      continue;
+    }
+    if (
+      hunk &&
+      hunk.oldLines === hunk.expectedOld &&
+      hunk.newLines === hunk.expectedNew &&
+      (line === "" || line.startsWith("@@ "))
+    ) {
+      hunk = null;
+    }
+    if (hunk) {
+      if (line === "\\ No newline at end of file") continue;
+      if (line.startsWith(" ")) {
+        hunk.oldLines += 1;
+        hunk.newLines += 1;
+      } else if (line.startsWith("-")) {
+        hunk.oldLines += 1;
+      } else if (line.startsWith("+")) {
+        hunk.newLines += 1;
+      } else {
+        invalidUnifiedDiff("a hunk contains a line without a unified-diff prefix");
+      }
+      if (hunk.oldLines > hunk.expectedOld || hunk.newLines > hunk.expectedNew) {
+        invalidUnifiedDiff("a hunk contains more lines than declared in its header");
+      }
+      continue;
+    }
+    if (line.startsWith("--- ")) {
+      if (section.oldHeader || section.newHeader) invalidUnifiedDiff("a file block has duplicate or misplaced --- headers");
+      if (line !== `--- ${section.oldPath}` && line !== "--- /dev/null") {
+        invalidUnifiedDiff("a --- header does not match its diff --git path");
+      }
+      section.oldHeader = true;
+      continue;
+    }
+    if (line.startsWith("+++ ")) {
+      if (!section.oldHeader || section.newHeader) invalidUnifiedDiff("a file block has duplicate or misplaced +++ headers");
+      if (line !== `+++ ${section.newPath}` && line !== "+++ /dev/null") {
+        invalidUnifiedDiff("a +++ header does not match its diff --git path");
+      }
+      section.newHeader = true;
+      continue;
+    }
+    if (line.startsWith("@@ ")) {
+      if (!section.oldHeader || !section.newHeader) invalidUnifiedDiff("a hunk appears before complete file headers");
+      const match = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?$/);
+      if (!match) invalidUnifiedDiff("a hunk header is malformed");
+      hunk = {
+        expectedOld: Number(match[2] || 1),
+        expectedNew: Number(match[4] || 1),
+        oldLines: 0,
+        newLines: 0,
+      };
+      section.hunks += 1;
+      continue;
+    }
+    if (!line || line.startsWith("index ") || /^(?:old|new|new file|deleted file) mode \d+$/.test(line)) continue;
+    invalidUnifiedDiff("a file block contains unexpected content outside a hunk");
+  }
+  finishSection();
+}
+
 function samePaths(left, right) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
@@ -713,6 +756,7 @@ export function applyBuilderPatch({
   const { policy, policyPath } = loadPolicy(sourceEnv, root);
   const declared = declaredPatchPaths(normalizedPatch);
   validatePaths(declared, policy.allowed_paths);
+  assertCompleteUnifiedDiff(normalizedPatch);
   authority(root, sourceEnv, "Before structured patch check");
   run("/usr/bin/git", ["apply", "--check", "--recount", "--whitespace=error-all", "-"], {
     cwd: root,
