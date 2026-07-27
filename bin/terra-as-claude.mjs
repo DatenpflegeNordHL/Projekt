@@ -25,8 +25,11 @@ const MAX_TOOL_DIAGNOSTICS = 20;
 const MAX_TOOL_DIAGNOSTIC_TEXT = 8_000;
 const MAX_REJECTED_RESPONSE_BYTES = 65_536;
 const MAX_RETRY_CONTEXT_BYTES = 4_096;
+const MAX_CANDIDATE_VALIDATION_ARTIFACT_BYTES = 20_000;
 const RETRY_CONTEXT_FILE = "builder-retry-context.json";
 const RETRY_CONTEXT_CONSUMED_FILE = "builder-retry-context-consumed.json";
+const CANDIDATE_VALIDATION_CONTEXT_FILE = "builder-candidate-validation-context.json";
+const CANDIDATE_VALIDATION_CONTEXT_CONSUMED_FILE = "builder-candidate-validation-context-consumed.json";
 
 function fail(message) {
   throw new Error(message);
@@ -263,6 +266,102 @@ function retryContextGuidance(context) {
 - reason: ${context.reason}`;
 }
 
+function validCandidateValidationContext(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const expected = ["category", "command", "exit_status", "failure_code", "failure_tail", "schema"];
+  if (Object.keys(value).sort().join("\0") !== expected.join("\0")) return null;
+  if (
+    value.schema !== "codexlooper.builder-candidate-validation-context.v1" ||
+    value.failure_code !== "CODEXLOOPER_CANDIDATE_FULL_PROJECT_CHECK_FAILED" ||
+    value.category !== "candidate_full_project_validation" ||
+    value.command !== "npm run check" ||
+    !Number.isSafeInteger(value.exit_status) ||
+    value.exit_status === 0 ||
+    typeof value.failure_tail !== "string" ||
+    Buffer.byteLength(value.failure_tail, "utf8") > MAX_RETRY_CONTEXT_BYTES
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    failure_code: value.failure_code,
+    category: value.category,
+    command: value.command,
+    exit_status: value.exit_status,
+    failure_tail: redactDiagnostic(value.failure_tail),
+  });
+}
+
+function retainCandidateValidationContext(context, diagnostic) {
+  if (!context || !diagnostic) return;
+  const runDirectory = exactPrivateRunDirectory();
+  const contextPath = resolve(runDirectory, CANDIDATE_VALIDATION_CONTEXT_FILE);
+  const consumedPath = resolve(runDirectory, CANDIDATE_VALIDATION_CONTEXT_CONSUMED_FILE);
+  if (existsSync(consumedPath)) return;
+  const artifact = {
+    schema: "codexlooper.builder-candidate-validation.v1",
+    failure_code: context.failure_code,
+    command: context.command,
+    exit_status: context.exit_status,
+    stdout: redactDiagnostic(diagnostic.stdout),
+    stderr: redactDiagnostic(diagnostic.stderr),
+  };
+  const serializedArtifact = `${JSON.stringify(artifact)}\n`;
+  const serializedContext = `${JSON.stringify({
+    schema: "codexlooper.builder-candidate-validation-context.v1",
+    ...context,
+  })}\n`;
+  if (
+    Buffer.byteLength(serializedArtifact, "utf8") > MAX_CANDIDATE_VALIDATION_ARTIFACT_BYTES ||
+    Buffer.byteLength(serializedContext, "utf8") > MAX_RETRY_CONTEXT_BYTES
+  ) {
+    fail("Candidate validation retry context exceeds its bounded size");
+  }
+  const artifactPath = resolve(
+    runDirectory,
+    `builder-candidate-validation-${Date.now()}-${process.pid}.json`,
+  );
+  writeFileSync(artifactPath, serializedArtifact, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  chmodSync(artifactPath, 0o600);
+  writeFileSync(contextPath, serializedContext, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  chmodSync(contextPath, 0o600);
+}
+
+function consumeCandidateValidationContext() {
+  const contextPath = retryContextPath(CANDIDATE_VALIDATION_CONTEXT_FILE);
+  const consumedPath = retryContextPath(CANDIDATE_VALIDATION_CONTEXT_CONSUMED_FILE);
+  if (existsSync(consumedPath)) {
+    rmSync(contextPath, { force: true });
+    return null;
+  }
+  if (!existsSync(contextPath)) return null;
+  let context;
+  try {
+    const serialized = readFileSync(contextPath, "utf8");
+    if (Buffer.byteLength(serialized, "utf8") > MAX_RETRY_CONTEXT_BYTES) return null;
+    context = validCandidateValidationContext(JSON.parse(serialized));
+  } catch {
+    context = null;
+  }
+  writeFileSync(
+    consumedPath,
+    `${JSON.stringify({ schema: "codexlooper.builder-candidate-validation-context-consumed.v1" })}\n`,
+    { encoding: "utf8", mode: 0o600, flag: "wx" },
+  );
+  chmodSync(consumedPath, 0o600);
+  rmSync(contextPath, { force: true });
+  return context;
+}
+
+function candidateValidationContextGuidance(context) {
+  if (!context) return "";
+  return `\n\nTrusted host candidate validation retry context (re-read the immutable snapshot and return one corrected strict Builder Envelope v2 object):
+- failure_code: ${context.failure_code}
+- category: ${context.category}
+- command: ${context.command}
+- exit_status: ${context.exit_status}
+- failure_tail: ${context.failure_tail}`;
+}
+
 function planCompleted(projectRoot = process.cwd(), sourceEnv = process.env) {
   const policyPath = sourceEnv.CODEXLOOPER_RUN_POLICY;
   if (typeof policyPath !== "string" || !policyPath) fail("Run policy is unavailable for completion check");
@@ -341,7 +440,8 @@ try {
   const internalReview = prompt.includes("<<<RALPHEX:REVIEW_DONE>>>");
   const phase = internalReview ? "review" : "task";
   const retryContext = consumeBuilderRetryContext();
-  prompt = `${builderEnvelopeV2Guidance(phase)}${retryContextGuidance(retryContext)}\n\n${reviewGuidance(internalReview)}${prompt}`;
+  const candidateValidationContext = consumeCandidateValidationContext();
+  prompt = `${builderEnvelopeV2Guidance(phase)}${retryContextGuidance(retryContext)}${candidateValidationContextGuidance(candidateValidationContext)}\n\n${reviewGuidance(internalReview)}${prompt}`;
   snapshot = createBuilderSnapshot();
 
   const launch = prepareProfileLaunch("builder", {
@@ -464,6 +564,10 @@ try {
         ? applyBuilderOperations({ envelope: envelope.operations, phase })
         : { committed: false };
     } catch (error) {
+      retainCandidateValidationContext(
+        error.candidateValidationContext,
+        error.candidateValidationDiagnostic,
+      );
       retainBuilderRetryContext(error.builderRetryContext);
       throw error;
     }

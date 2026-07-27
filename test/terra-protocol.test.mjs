@@ -105,6 +105,10 @@ function fixture({
     { mode: 0o600 },
   );
   writeFileSync(join(project, "README.md"), "fixture\n");
+  writeFileSync(
+    join(project, "package.json"),
+    `${JSON.stringify({ private: true, scripts: { check: "node --check src/value.mjs" } })}\n`,
+  );
   writeFileSync(join(project, "src", "value.mjs"), "export const value = 1;\n");
   writeFileSync(planPath, planContent);
   writeFileSync(
@@ -125,7 +129,7 @@ function fixture({
     { mode: 0o600 },
   );
 
-  git(project, ["add", "README.md", "src/value.mjs", "docs/plans/feature.md"]);
+  git(project, ["add", "README.md", "package.json", "src/value.mjs", "docs/plans/feature.md"]);
   git(project, ["commit", "-m", "chore: initialize fixture"]);
 
   return {
@@ -154,6 +158,7 @@ function runAdapter(current) {
       CODEXLOOPER_RUN_POLICY: current.policyPath,
       CODEXLOOPER_ALLOWED_MODELS:
         "openai/gpt-5.6-terra,openai/gpt-5.6-sol",
+      ...current.runtimeEnv,
     },
   });
 }
@@ -176,6 +181,76 @@ function retryContextPath(runDirectory) {
 
 function consumedRetryContextPath(runDirectory) {
   return join(runDirectory, "builder-retry-context-consumed.json");
+}
+
+function candidateValidationArtifacts(runDirectory) {
+  return readdirSync(runDirectory)
+    .filter((name) => /^builder-candidate-validation-\d+-\d+\.json$/u.test(name))
+    .sort();
+}
+
+function candidateValidationContextPath(runDirectory) {
+  return join(runDirectory, "builder-candidate-validation-context.json");
+}
+
+function consumedCandidateValidationContextPath(runDirectory) {
+  return join(runDirectory, "builder-candidate-validation-context-consumed.json");
+}
+
+function sha256Bytes(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function enableCandidateCheck(current, npmProgram) {
+  const npmCli = join(current.project, "tools", "npm-cli.mjs");
+  writeFileSync(npmCli, npmProgram, { mode: 0o700 });
+  chmodSync(npmCli, 0o700);
+  const nodePath = realpathSync(process.execPath);
+  const nodeBytes = readFileSync(nodePath);
+  const externalTools = {
+    npm_cli: { path: npmCli, sha256: sha256Bytes(readFileSync(npmCli)) },
+  };
+  const node = {
+    path: nodePath,
+    sha256: sha256Bytes(nodeBytes),
+    mode: statSync(nodePath).mode & 0o777,
+    version: process.version,
+    major: Number(process.versions.node.split(".")[0]),
+  };
+  const seed = {
+    schema: "codexlooper.runtime-seed.v1",
+    source_commit: "0".repeat(40),
+    node,
+    external_tools: externalTools,
+    budgets: {},
+    files: [],
+  };
+  const runtimeId = sha256Bytes(JSON.stringify(seed));
+  const runtimeDirectory = join(current.project, ".codexlooper", "runtime", runtimeId);
+  mkdirSync(runtimeDirectory, { recursive: true, mode: 0o700 });
+  const manifestPath = join(runtimeDirectory, "manifest.json");
+  const manifest = {
+    ...seed,
+    schema: "codexlooper.runtime.v1",
+    runtime_id: runtimeId,
+    runtime_directory: runtimeDirectory,
+  };
+  writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, { mode: 0o400 });
+  chmodSync(manifestPath, 0o400);
+  chmodSync(runtimeDirectory, 0o500);
+  const policy = JSON.parse(readFileSync(current.policyPath, "utf8"));
+  policy.full_project_check = {
+    package_json_sha256: sha256Bytes(readFileSync(join(current.project, "package.json"), "utf8")),
+    check_script: "node --check src/value.mjs",
+  };
+  writeFileSync(current.policyPath, `${JSON.stringify(policy)}\n`, { mode: 0o600 });
+  current.runtimeEnv = {
+    CODEXLOOPER_RUNTIME_MANIFEST: manifestPath,
+    CODEXLOOPER_RUNTIME_MANIFEST_SHA256: sha256Bytes(readFileSync(manifestPath)),
+    CODEXLOOPER_RUNTIME_DIR: runtimeDirectory,
+    CODEXLOOPER_NPM_CLI: npmCli,
+  };
+  current.runtimeDirectory = runtimeDirectory;
 }
 
 function replaceValueEnvelope({ path = "src/value.mjs", oldText = "value = 1", newText = "value = 2" } = {}) {
@@ -264,6 +339,7 @@ test("retains a private Builder Envelope v2 artifact when host policy rejects it
     assert.equal(readFileSync(artifactPath, "utf8"), payload);
     assert.equal(statSync(artifactPath).mode & 0o777, 0o600);
     assert.equal(readFileSync(join(current.project, "README.md"), "utf8"), "fixture\n");
+    assert.equal(existsSync(candidateValidationContextPath(current.runDirectory)), false);
     assert.equal(git(current.project, ["status", "--porcelain=v1"]), "");
   } finally {
     rmSync(current.project, { recursive: true, force: true });
@@ -290,6 +366,7 @@ test("a safe replace_exact precondition failure supplies one private typed retry
     });
     assert.equal(statSync(contextPath).mode & 0o777, 0o600);
     assert.ok(statSync(contextPath).size <= 4_096);
+    assert.deepEqual(candidateValidationArtifacts(current.runDirectory), []);
 
     writeFakeCodex(current.codex, replaceValueEnvelope(), [], [], promptCapturePath);
     const secondResult = runAdapter(current);
@@ -315,6 +392,77 @@ test("a safe replace_exact precondition failure supplies one private typed retry
     }
   } finally {
     rmSync(promptCapturePath, { force: true });
+    rmSync(current.project, { recursive: true, force: true });
+  }
+});
+
+test("a failed isolated candidate check retains redacted failure streams and supplies one typed retry", () => {
+  const promptCapturePath = join(tmpdir(), `codexlooper-candidate-retry-${process.pid}-${Date.now()}.txt`);
+  const current = fixture({ agentText: replaceValueEnvelope() });
+  enableCandidateCheck(
+    current,
+    `#!/usr/bin/env node
+process.stderr.write("npm notice update available closerouter_test_secret\\n");
+process.stdout.write("✖ AssertionError: expected candidate validation to pass\\n");
+process.exit(1);
+`,
+  );
+  try {
+    const start = git(current.project, ["rev-parse", "HEAD"]);
+    const first = runAdapter(current);
+    assert.notEqual(first.status, 0);
+    const artifacts = candidateValidationArtifacts(current.runDirectory);
+    assert.equal(artifacts.length, 1);
+    const artifactPath = join(current.runDirectory, artifacts[0]);
+    const artifact = JSON.parse(readFileSync(artifactPath, "utf8"));
+    assert.equal(artifact.failure_code, "CODEXLOOPER_CANDIDATE_FULL_PROJECT_CHECK_FAILED");
+    assert.equal(artifact.command, "npm run check");
+    assert.equal(artifact.exit_status, 1);
+    assert.match(artifact.stdout, /AssertionError/u);
+    assert.match(artifact.stderr, /npm notice/u);
+    assert.equal(readFileSync(artifactPath, "utf8").includes("closerouter_test_secret"), false);
+    assert.equal(statSync(artifactPath).mode & 0o777, 0o600);
+    assert.ok(statSync(artifactPath).size <= 20_000);
+    const contextPath = candidateValidationContextPath(current.runDirectory);
+    assert.equal(statSync(contextPath).mode & 0o777, 0o600);
+    const context = JSON.parse(readFileSync(contextPath, "utf8"));
+    assert.equal(context.failure_tail.includes("AssertionError"), true);
+    assert.equal(context.failure_tail.includes("npm notice"), false);
+    assert.equal(git(current.project, ["rev-parse", "HEAD"]), start);
+    assert.equal(git(current.project, ["status", "--porcelain=v1"]), "");
+
+    writeFakeCodex(current.codex, replaceValueEnvelope(), [], [], promptCapturePath);
+    const second = runAdapter(current);
+    assert.notEqual(second.status, 0);
+    const prompt = readFileSync(promptCapturePath, "utf8");
+    assert.match(prompt, /candidate_full_project_validation/u);
+    assert.match(prompt, /command: npm run check/u);
+    assert.match(prompt, /AssertionError/u);
+    assert.equal(prompt.includes("closerouter_test_secret"), false);
+    assert.equal(existsSync(candidateValidationContextPath(current.runDirectory)), false);
+    assert.equal(statSync(consumedCandidateValidationContextPath(current.runDirectory)).mode & 0o777, 0o600);
+    assert.equal(candidateValidationArtifacts(current.runDirectory).length, 1);
+    assert.equal(git(current.project, ["rev-list", "--count", "HEAD"]), "1");
+    assert.equal(git(current.project, ["status", "--porcelain=v1"]), "");
+  } finally {
+    rmSync(promptCapturePath, { force: true });
+    chmodSync(current.runtimeDirectory, 0o700);
+    chmodSync(join(current.project, ".codexlooper", "runtime"), 0o700);
+    rmSync(current.project, { recursive: true, force: true });
+  }
+});
+
+test("a successful isolated candidate check leaves no candidate validation artifact", () => {
+  const current = fixture({ agentText: replaceValueEnvelope() });
+  enableCandidateCheck(current, "#!/usr/bin/env node\nprocess.exit(0);\n");
+  try {
+    const result = runAdapter(current);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.deepEqual(candidateValidationArtifacts(current.runDirectory), []);
+    assert.equal(existsSync(candidateValidationContextPath(current.runDirectory)), false);
+  } finally {
+    chmodSync(current.runtimeDirectory, 0o700);
+    chmodSync(join(current.project, ".codexlooper", "runtime"), 0o700);
     rmSync(current.project, { recursive: true, force: true });
   }
 });
@@ -364,6 +512,7 @@ test("retains bounded, redacted private diagnostics for malformed Builder respon
       assert.ok(Buffer.byteLength(artifact.response, "utf8") <= 65_536);
       assert.equal(readFileSync(artifactPath, "utf8").includes("closerouter_test_secret"), false);
       assert.equal(existsSync(retryContextPath(current.runDirectory)), false);
+      assert.equal(existsSync(candidateValidationContextPath(current.runDirectory)), false);
       assert.equal(readFileSync(join(current.project, "src", "value.mjs"), "utf8"), "export const value = 1;\n");
       assert.equal(git(current.project, ["status", "--porcelain=v1"]), "");
     } finally {

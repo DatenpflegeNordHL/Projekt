@@ -44,6 +44,8 @@ const SAFE_ENV_KEYS = [
 const MAX_VALIDATION_OUTPUT = 12_000;
 const VALIDATION_TIMEOUT_MS = 180_000;
 const MAX_PATCH_BYTES = 2_000_000;
+const MAX_CANDIDATE_CHECK_STREAM_BYTES = 8_000;
+const MAX_CANDIDATE_CHECK_TAIL_BYTES = 8_000;
 const PATCH_PATH = /^[A-Za-z0-9._@+\/-]+$/;
 const FORBIDDEN_PATCH_MARKERS = [
   "GIT binary patch",
@@ -79,6 +81,29 @@ function safeEnvironment(sourceEnv = process.env) {
   }
   env.DO_NOT_TRACK = "1";
   return env;
+}
+
+function redactCandidateDiagnostic(value, sourceEnv = process.env) {
+  let text = String(value || "");
+  const secret = sourceEnv.CLOSEROUTER_API_KEY;
+  if (secret) text = text.replaceAll(secret, "[REDACTED]");
+  return text.replace(/authorization\s*[:=]\s*bearer\s+[^\s,;]+/gi, "[REDACTED]");
+}
+
+function boundedCandidateDiagnostic(value, sourceEnv) {
+  return Buffer.from(redactCandidateDiagnostic(value, sourceEnv), "utf8")
+    .subarray(-MAX_CANDIDATE_CHECK_STREAM_BYTES)
+    .toString("utf8");
+}
+
+function candidateFailureTail(stdout, stderr) {
+  const relevant = /(?:assertionerror|\berror:|\bfail(?:ed|ure)?\b|not ok|[✖×])/iu;
+  const streams = [stdout, stderr];
+  const selected = streams.find((stream) => relevant.test(stream)) || stderr || stdout;
+  return Buffer.from(selected, "utf8")
+    .subarray(-MAX_CANDIDATE_CHECK_TAIL_BYTES)
+    .toString("utf8")
+    .trim();
 }
 
 function authority(root, sourceEnv, label) {
@@ -280,12 +305,47 @@ function runFullProjectCandidateCheck(projectRoot, policy, sourceEnv, environmen
     fail("CODEXLOOPER_PROJECT_CHECK_CHANGED", "Candidate changed the run-start package scripts.check command");
   }
   const started = Date.now();
-  run(process.execPath, [npmCli, "run", "check"], {
+  const execution = spawnSync(process.execPath, [npmCli, "run", "check"], {
     cwd: projectRoot,
     env: environment,
-    label: "Candidate full-project npm run check",
     timeout: VALIDATION_TIMEOUT_MS,
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
   });
+  if (execution.error || execution.status === null) {
+    const detail = boundedCandidateDiagnostic(
+      execution.stderr || execution.stdout || execution.error?.message || "unknown error",
+      sourceEnv,
+    ).trim();
+    fail(
+      "CODEXLOOPER_HOST_COMMAND_FAILED",
+      `Candidate full-project npm run check failed${detail ? `: ${detail}` : ""}`,
+    );
+  }
+  if (execution.status !== 0) {
+    const stdout = boundedCandidateDiagnostic(execution.stdout, sourceEnv);
+    const stderr = boundedCandidateDiagnostic(execution.stderr, sourceEnv);
+    const failureTail = candidateFailureTail(stdout, stderr);
+    const error = new Error(
+      `Candidate full-project npm run check failed with status ${execution.status}${failureTail ? `: ${failureTail}` : ""}`,
+    );
+    error.code = "CODEXLOOPER_CANDIDATE_FULL_PROJECT_CHECK_FAILED";
+    error.candidateValidationContext = Object.freeze({
+      failure_code: error.code,
+      category: "candidate_full_project_validation",
+      command: "npm run check",
+      exit_status: execution.status,
+      failure_tail: failureTail,
+    });
+    error.candidateValidationDiagnostic = Object.freeze({
+      failure_code: error.code,
+      command: "npm run check",
+      exit_status: execution.status,
+      stdout,
+      stderr,
+    });
+    throw error;
+  }
   return {
     command: "npm run check",
     executable: npmCli,
