@@ -158,6 +158,11 @@ if [ "\${1:-}" = "--version" ]; then echo 'ralphex ${ralphexVersion}'; exit 0; f
 [ -n "\${CODEXLOOPER_EXPECTED_BRANCH:-}" ]
 [ "\$#" -eq 1 ]
 printf '%s\n' "\$1" > "\${CODEXLOOPER_RUN_DIR}/ralphex-plan-path"
+if [ -n "\${CODEXLOOPER_CANONICAL_PLAN_PATH:-}" ] || [ -n "\${CODEXLOOPER_CANONICAL_PLAN_SHA256:-}" ]; then
+  [ -n "\${CODEXLOOPER_CANONICAL_PLAN_PATH:-}" ]
+  [ -n "\${CODEXLOOPER_CANONICAL_PLAN_SHA256:-}" ]
+  printf '%s\n%s\n' "\$CODEXLOOPER_CANONICAL_PLAN_PATH" "\$CODEXLOOPER_CANONICAL_PLAN_SHA256" > "\${CODEXLOOPER_RUN_DIR}/canonical-plan-context"
+fi
 terra="$(sed -n 's/^claude_command = //p' .ralphex/config)"
 sol="$(sed -n 's/^custom_review_script = //p' .ralphex/config)"
 plan_path="\$1"
@@ -535,6 +540,10 @@ test("generated runner exposes only a private selected-task plan to Ralphex", ()
     assert.equal(policy.original_plan_sha256, receipt.original_plan_sha256);
     assert.equal(policy.derived_plan_sha256, receipt.derived_plan_sha256);
     assert.equal(policy.selected_task_completed_plan_sha256, sha256(originalPlan));
+    assert.deepEqual(
+      readFileSync(join(runDirectory, "canonical-plan-context"), "utf8").trim().split("\n"),
+      [policy.original_plan, policy.original_plan_sha256],
+    );
     assert.equal(statSync(derivedPlanPath).mode & 0o777, 0o400);
     assert.match(derivedPlan, /### Task 1: Result/);
     assert.doesNotMatch(derivedPlan, /### Task 2: Must not run/);

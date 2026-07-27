@@ -683,6 +683,10 @@ export async function runProject({
       CODEXLOOPER_EXPECTED_PROJECT_ROOT: projectRoot,
       CODEXLOOPER_EXPECTED_BRANCH: branch,
       CODEXLOOPER_RUN_START_SHA: headBefore,
+      ...(singleTask ? {
+        CODEXLOOPER_CANONICAL_PLAN_PATH: plan.relative,
+        CODEXLOOPER_CANONICAL_PLAN_SHA256: singleTask.original_plan_sha256,
+      } : {}),
     });
     const remainingMs = Math.max(1, budget.state.deadline_at_ms - Date.now());
     const ralphexResult = await spawnRalphex(ralphexCommand, derivedPlanPath || plan.relative, {

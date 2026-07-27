@@ -161,6 +161,7 @@ function runAdapter(current) {
       CODEXLOOPER_ALLOWED_MODELS:
         "openai/gpt-5.6-terra,openai/gpt-5.6-sol",
       ...current.runtimeEnv,
+      ...current.extraEnv,
     },
   });
 }
@@ -253,6 +254,27 @@ function enableCandidateCheck(current, npmProgram) {
     CODEXLOOPER_NPM_CLI: npmCli,
   };
   current.runtimeDirectory = runtimeDirectory;
+}
+
+function enableCanonicalPlanContext(current) {
+  const planContent = readFileSync(join(current.project, "docs", "plans", "feature.md"), "utf8");
+  const policy = JSON.parse(readFileSync(current.policyPath, "utf8"));
+  const canonicalPath = "docs/plans/feature.md";
+  const canonicalSha256 = sha256Bytes(planContent);
+  Object.assign(policy, {
+    single_task: true,
+    selected_task: 3,
+    original_plan: canonicalPath,
+    original_plan_sha256: canonicalSha256,
+    derived_plan_sha256: "a".repeat(64),
+    selected_task_completed_plan_sha256: sha256Bytes(planContent.replace("- [ ] Complete", "- [x] Complete")),
+  });
+  writeFileSync(current.policyPath, `${JSON.stringify(policy)}\n`, { mode: 0o600 });
+  current.extraEnv = {
+    CODEXLOOPER_CANONICAL_PLAN_PATH: canonicalPath,
+    CODEXLOOPER_CANONICAL_PLAN_SHA256: canonicalSha256,
+  };
+  return { canonicalPath, canonicalSha256 };
 }
 
 function replaceValueEnvelope({ path = "src/value.mjs", oldText = "value = 1", newText = "value = 2" } = {}) {
@@ -407,8 +429,8 @@ test("a failed isolated candidate check retains redacted failure streams and sup
   enableCandidateCheck(
     current,
     `#!/usr/bin/env node
-process.stderr.write("npm notice update available closerouter_test_secret\\n");
-process.stdout.write("✖ AssertionError: expected candidate validation to pass\\n");
+process.stderr.write("é".repeat(10000) + " npm notice closerouter_test_secret\\n");
+process.stdout.write("é".repeat(10000) + "\\n✖ AssertionError: expected candidate validation to pass\\n");
 process.exit(1);
 `,
   );
@@ -428,11 +450,15 @@ process.exit(1);
     assert.equal(readFileSync(artifactPath, "utf8").includes("closerouter_test_secret"), false);
     assert.equal(statSync(artifactPath).mode & 0o777, 0o600);
     assert.ok(statSync(artifactPath).size <= 20_000);
+    assert.equal(artifact.stdout_truncated, true);
+    assert.equal(artifact.stderr_truncated, true);
     const contextPath = candidateValidationContextPath(current.runDirectory);
     assert.equal(statSync(contextPath).mode & 0o777, 0o600);
     const context = JSON.parse(readFileSync(contextPath, "utf8"));
     assert.equal(context.failure_tail.includes("AssertionError"), true);
     assert.equal(context.failure_tail.includes("npm notice"), false);
+    assert.equal(context.truncated, true);
+    assert.ok(Buffer.byteLength(readFileSync(contextPath, "utf8"), "utf8") <= 4_096);
     assert.equal(git(current.project, ["rev-parse", "HEAD"]), start);
     assert.equal(git(current.project, ["status", "--porcelain=v1"]), "");
 
@@ -453,6 +479,28 @@ process.exit(1);
     rmSync(promptCapturePath, { force: true });
     chmodSync(current.runtimeDirectory, 0o700);
     chmodSync(join(current.project, ".codexlooper", "runtime"), 0o700);
+    rmSync(current.project, { recursive: true, force: true });
+  }
+});
+
+test("single-task Builder guidance receives only the policy-bound canonical plan path and hash", () => {
+  const promptCapturePath = join(tmpdir(), `codexlooper-canonical-plan-${process.pid}-${Date.now()}.txt`);
+  const current = fixture({
+    agentText: replaceValueEnvelope(),
+    planContent: "# Plan\n\n- [ ] Complete\n",
+    promptCapturePath,
+  });
+  const { canonicalPath, canonicalSha256 } = enableCanonicalPlanContext(current);
+  try {
+    const result = runAdapter(current);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const prompt = readFileSync(promptCapturePath, "utf8");
+    assert.match(prompt, new RegExp(`target exactly ${canonicalPath.replaceAll("/", "\\/")}`, "u"));
+    assert.equal(prompt.includes(`expected_file_sha256 ${canonicalSha256}`), true);
+    assert.match(prompt, /Do not derive this hash from private task-N\.md/u);
+    assert.equal(prompt.includes(current.project), false);
+  } finally {
+    rmSync(promptCapturePath, { force: true });
     rmSync(current.project, { recursive: true, force: true });
   }
 });

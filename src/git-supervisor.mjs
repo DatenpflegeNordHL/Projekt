@@ -90,20 +90,29 @@ function redactCandidateDiagnostic(value, sourceEnv = process.env) {
   return text.replace(/authorization\s*[:=]\s*bearer\s+[^\s,;]+/gi, "[REDACTED]");
 }
 
+function utf8Tail(bytes, maximumBytes) {
+  let tail = bytes.subarray(Math.max(0, bytes.length - maximumBytes));
+  while (tail.length > 0 && (tail[0] & 0xc0) === 0x80) tail = tail.subarray(1);
+  return tail;
+}
+
 function boundedCandidateDiagnostic(value, sourceEnv) {
-  return Buffer.from(redactCandidateDiagnostic(value, sourceEnv), "utf8")
-    .subarray(-MAX_CANDIDATE_CHECK_STREAM_BYTES)
-    .toString("utf8");
+  const bytes = Buffer.from(redactCandidateDiagnostic(value, sourceEnv), "utf8");
+  return {
+    value: utf8Tail(bytes, MAX_CANDIDATE_CHECK_STREAM_BYTES).toString("utf8"),
+    truncated: bytes.length > MAX_CANDIDATE_CHECK_STREAM_BYTES,
+  };
 }
 
 function candidateFailureTail(stdout, stderr) {
   const relevant = /(?:assertionerror|\berror:|\bfail(?:ed|ure)?\b|not ok|[✖×])/iu;
   const streams = [stdout, stderr];
   const selected = streams.find((stream) => relevant.test(stream)) || stderr || stdout;
-  return Buffer.from(selected, "utf8")
-    .subarray(-MAX_CANDIDATE_CHECK_TAIL_BYTES)
-    .toString("utf8")
-    .trim();
+  const bytes = Buffer.from(selected, "utf8");
+  return {
+    value: utf8Tail(bytes, MAX_CANDIDATE_CHECK_TAIL_BYTES).toString("utf8").trim(),
+    truncated: bytes.length > MAX_CANDIDATE_CHECK_TAIL_BYTES,
+  };
 }
 
 function authority(root, sourceEnv, label) {
@@ -316,7 +325,7 @@ function runFullProjectCandidateCheck(projectRoot, policy, sourceEnv, environmen
     const detail = boundedCandidateDiagnostic(
       execution.stderr || execution.stdout || execution.error?.message || "unknown error",
       sourceEnv,
-    ).trim();
+    ).value.trim();
     fail(
       "CODEXLOOPER_HOST_COMMAND_FAILED",
       `Candidate full-project npm run check failed${detail ? `: ${detail}` : ""}`,
@@ -325,9 +334,9 @@ function runFullProjectCandidateCheck(projectRoot, policy, sourceEnv, environmen
   if (execution.status !== 0) {
     const stdout = boundedCandidateDiagnostic(execution.stdout, sourceEnv);
     const stderr = boundedCandidateDiagnostic(execution.stderr, sourceEnv);
-    const failureTail = candidateFailureTail(stdout, stderr);
+    const failureTail = candidateFailureTail(stdout.value, stderr.value);
     const error = new Error(
-      `Candidate full-project npm run check failed with status ${execution.status}${failureTail ? `: ${failureTail}` : ""}`,
+      `Candidate full-project npm run check failed with status ${execution.status}${failureTail.value ? `: ${failureTail.value}` : ""}`,
     );
     error.code = "CODEXLOOPER_CANDIDATE_FULL_PROJECT_CHECK_FAILED";
     error.candidateValidationContext = Object.freeze({
@@ -335,14 +344,17 @@ function runFullProjectCandidateCheck(projectRoot, policy, sourceEnv, environmen
       category: "candidate_full_project_validation",
       command: "npm run check",
       exit_status: execution.status,
-      failure_tail: failureTail,
+      failure_tail: failureTail.value,
+      truncated: failureTail.truncated || stdout.truncated || stderr.truncated,
     });
     error.candidateValidationDiagnostic = Object.freeze({
       failure_code: error.code,
       command: "npm run check",
       exit_status: execution.status,
-      stdout,
-      stderr,
+      stdout: stdout.value,
+      stderr: stderr.value,
+      stdout_truncated: stdout.truncated,
+      stderr_truncated: stderr.truncated,
     });
     throw error;
   }
