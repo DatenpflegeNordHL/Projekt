@@ -83,10 +83,14 @@ function safeEnvironment(sourceEnv = process.env) {
   return env;
 }
 
-function redactCandidateDiagnostic(value, sourceEnv = process.env) {
+function redactCandidateDiagnostic(value, sourceEnv = process.env, candidatePath = null) {
   let text = String(value || "");
   const secret = sourceEnv.CLOSEROUTER_API_KEY;
   if (secret) text = text.replaceAll(secret, "[REDACTED]");
+  if (candidatePath) {
+    text = text.replaceAll(candidatePath, "<candidate>");
+    text = text.replaceAll(dirname(candidatePath), "<candidate>");
+  }
   return text.replace(/authorization\s*[:=]\s*bearer\s+[^\s,;]+/gi, "[REDACTED]");
 }
 
@@ -96,8 +100,8 @@ function utf8Tail(bytes, maximumBytes) {
   return tail;
 }
 
-function boundedCandidateDiagnostic(value, sourceEnv) {
-  const bytes = Buffer.from(redactCandidateDiagnostic(value, sourceEnv), "utf8");
+function boundedCandidateDiagnostic(value, sourceEnv, candidatePath) {
+  const bytes = Buffer.from(redactCandidateDiagnostic(value, sourceEnv, candidatePath), "utf8");
   return {
     value: utf8Tail(bytes, MAX_CANDIDATE_CHECK_STREAM_BYTES).toString("utf8"),
     truncated: bytes.length > MAX_CANDIDATE_CHECK_STREAM_BYTES,
@@ -325,6 +329,7 @@ function runFullProjectCandidateCheck(projectRoot, policy, sourceEnv, environmen
     const detail = boundedCandidateDiagnostic(
       execution.stderr || execution.stdout || execution.error?.message || "unknown error",
       sourceEnv,
+      projectRoot,
     ).value.trim();
     fail(
       "CODEXLOOPER_HOST_COMMAND_FAILED",
@@ -332,8 +337,8 @@ function runFullProjectCandidateCheck(projectRoot, policy, sourceEnv, environmen
     );
   }
   if (execution.status !== 0) {
-    const stdout = boundedCandidateDiagnostic(execution.stdout, sourceEnv);
-    const stderr = boundedCandidateDiagnostic(execution.stderr, sourceEnv);
+    const stdout = boundedCandidateDiagnostic(execution.stdout, sourceEnv, projectRoot);
+    const stderr = boundedCandidateDiagnostic(execution.stderr, sourceEnv, projectRoot);
     const failureTail = candidateFailureTail(stdout.value, stderr.value);
     const error = new Error(
       `Candidate full-project npm run check failed with status ${execution.status}${failureTail.value ? `: ${failureTail.value}` : ""}`,
@@ -400,6 +405,27 @@ function assertStagedCandidate(projectRoot, paths, sourceEnv = process.env) {
   }
 }
 
+function assertCandidateClean(projectRoot, sourceEnv, label) {
+  const status = run("/usr/bin/git", ["status", "--porcelain=v1", "--ignored"], {
+    cwd: projectRoot,
+    env: sourceEnv,
+    label,
+  });
+  if (status) {
+    fail("CODEXLOOPER_COMPLETION_CANDIDATE_DIRTY", "Candidate repository must be clean with no ignored artifacts");
+  }
+}
+
+function candidateCommitEnvironment(environment) {
+  return {
+    ...environment,
+    GIT_AUTHOR_NAME: "CodexLooper Candidate",
+    GIT_AUTHOR_EMAIL: "candidate@codexlooper.invalid",
+    GIT_COMMITTER_NAME: "CodexLooper Candidate",
+    GIT_COMMITTER_EMAIL: "candidate@codexlooper.invalid",
+  };
+}
+
 function isolatedCandidateEnvironment(candidateRoot) {
   const home = resolve(candidateRoot, "home");
   mkdirSync(home, { recursive: false, mode: 0o700 });
@@ -447,6 +473,39 @@ function candidateTree(projectRoot, sourceEnv) {
     env: sourceEnv,
     label: "Candidate tree lookup",
   });
+}
+
+function candidateIndexTree(projectRoot, sourceEnv) {
+  return run("/usr/bin/git", ["write-tree"], {
+    cwd: projectRoot,
+    env: sourceEnv,
+    label: "Candidate index tree lookup",
+  });
+}
+
+function assertCandidateCommit(projectRoot, sourceEnv, start, expectedTree) {
+  if (run("/usr/bin/git", ["remote"], { cwd: projectRoot, env: sourceEnv, label: "Candidate remote verification" })) {
+    fail("CODEXLOOPER_COMPLETION_CANDIDATE_INVALID", "Candidate temporary commit must not retain a remote");
+  }
+  const parents = run("/usr/bin/git", ["rev-list", "--parents", "-n", "1", "HEAD"], {
+    cwd: projectRoot,
+    env: sourceEnv,
+    label: "Candidate parent verification",
+  }).split(" ");
+  if (parents.length !== 2 || parents[1] !== start) {
+    fail("CODEXLOOPER_COMPLETION_CANDIDATE_INVALID", "Candidate temporary commit must have exactly the candidate start as parent");
+  }
+  if (candidateTree(projectRoot, sourceEnv) !== expectedTree) {
+    fail("CODEXLOOPER_COMPLETION_CANDIDATE_TREE_MISMATCH", "Candidate temporary commit tree does not match the verified staged tree");
+  }
+  if (run("/usr/bin/git", ["show", "-s", "--format=%an%n%ae%n%cn%n%ce", "HEAD"], {
+    cwd: projectRoot,
+    env: sourceEnv,
+    label: "Candidate commit identity verification",
+  }) !== "CodexLooper Candidate\ncandidate@codexlooper.invalid\nCodexLooper Candidate\ncandidate@codexlooper.invalid") {
+    fail("CODEXLOOPER_COMPLETION_CANDIDATE_INVALID", "Candidate temporary commit must use the fixed isolated identity");
+  }
+  assertCandidateClean(projectRoot, sourceEnv, "Candidate clean temporary commit verification");
 }
 
 function patchTaskCompletions(patch, plan) {
@@ -506,9 +565,7 @@ function prepareCompletionCandidate({ root, patch, declared, policy, sourceEnv, 
     if (run("/usr/bin/git", ["rev-parse", "HEAD"], { cwd: candidate, env, label: "Completion candidate HEAD" }) !== start) {
       fail("CODEXLOOPER_COMPLETION_CANDIDATE_INVALID", "Candidate repository did not check out the expected HEAD");
     }
-    if (run("/usr/bin/git", ["status", "--porcelain=v1"], { cwd: candidate, env, label: "Completion candidate clean checkout" })) {
-      fail("CODEXLOOPER_COMPLETION_CANDIDATE_DIRTY", "Candidate repository is not clean after checkout");
-    }
+    assertCandidateClean(candidate, env, "Completion candidate clean checkout");
     run("/usr/bin/git", ["apply", "--check", "--whitespace=error-all", "-"], {
       cwd: candidate,
       env,
@@ -530,29 +587,28 @@ function prepareCompletionCandidate({ root, patch, declared, policy, sourceEnv, 
     if (requireTaskCompletion && tasks.length === 0) {
       fail("CODEXLOOPER_COMPLETION_CANDIDATE_INVALID", "Candidate patch did not complete the declared task checkbox");
     }
-    const validation = runValidationCommands(candidate, policy.validation_commands, policy.allowed_paths, env);
-    const checks = validation.map((entry) => ({ ...entry, gate: "plan_validation" }));
-    const fullProjectCheck = runFullProjectCandidateCheck(candidate, policy, sourceEnv, env);
-    if (fullProjectCheck) checks.push({ ...fullProjectCheck, gate: "full_project_check" });
-    run("/usr/bin/git", ["add", "--all", "--", ...actual], {
+    run("/usr/bin/git", ["add", "--", ...actual], {
       cwd: candidate,
       env,
       label: "Completion candidate staging",
     });
     assertStagedCandidate(candidate, actual, env);
+    const expectedTree = candidateIndexTree(candidate, env);
     run("/usr/bin/git", [
       "-c", "core.hooksPath=/dev/null",
-      "-c", "user.name=CodexLooper Candidate",
-      "-c", "user.email=candidate@codexlooper.invalid",
+      "-c", "commit.gpgSign=false",
       "commit", "--no-gpg-sign", "--no-verify", "-m", "chore: validate completion candidate",
     ], {
       cwd: candidate,
-      env,
+      env: candidateCommitEnvironment(env),
       label: "Completion candidate temporary commit",
     });
-    if (run("/usr/bin/git", ["status", "--porcelain=v1"], { cwd: candidate, env, label: "Completion candidate pre-check status" })) {
-      fail("CODEXLOOPER_COMPLETION_CANDIDATE_DIRTY", "Candidate repository must be clean after plan validation");
-    }
+    assertCandidateCommit(candidate, env, start, expectedTree);
+    const validation = runValidationCommands(candidate, policy.validation_commands, policy.allowed_paths, env);
+    const checks = validation.map((entry) => ({ ...entry, gate: "plan_validation" }));
+    const fullProjectCheck = runFullProjectCandidateCheck(candidate, policy, sourceEnv, env);
+    if (fullProjectCheck) checks.push({ ...fullProjectCheck, gate: "full_project_check" });
+    assertCandidateClean(candidate, env, "Candidate post-validation clean verification");
     result = {
       required: true,
       mode: "isolated_candidate_repository",

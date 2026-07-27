@@ -634,6 +634,35 @@ test("a failing pinned full-project candidate check creates no host commit", () 
   }
 });
 
+test("full-project candidate validation runs from a clean private commit", () => {
+  const fixture = createFixture("0.130.0", "1.6.0", "0.6.3", { candidateCheck: "node check.mjs" });
+  try {
+    writeFileSync(
+      join(fixture.project, "check.mjs"),
+      `import { execFileSync } from "node:child_process";
+const run = (args) => execFileSync("/usr/bin/git", args, { encoding: "utf8" });
+if (run(["status", "--porcelain=v1", "--ignored"]) || run(["remote"])) process.exit(41);
+const parents = run(["rev-list", "--parents", "-n", "1", "HEAD"]).trim().split(" ");
+const identity = run(["show", "-s", "--format=%an%n%ae%n%cn%n%ce", "HEAD"]);
+if (parents.length !== 2 || identity !== "CodexLooper Candidate\\ncandidate@codexlooper.invalid\\nCodexLooper Candidate\\ncandidate@codexlooper.invalid\\n") process.exit(42);
+`,
+    );
+    git(fixture.project, ["add", "check.mjs"]);
+    git(fixture.project, ["commit", "-m", "test: require clean candidate check source"]);
+    const result = installFixture(fixture);
+    const run = spawnSync(result.runCommand, ["--task", "1", "docs/plans/fixture.md"], {
+      cwd: fixture.project,
+      encoding: "utf8",
+      env: modelEnv(),
+      timeout: 120_000,
+    });
+    assert.equal(run.status, 0, run.stderr || run.stdout);
+    assert.equal(git(fixture.project, ["status", "--porcelain=v1"]), "");
+  } finally {
+    removeTree(fixture.root);
+  }
+});
+
 test("a candidate cannot replace the run-start scripts.check command", () => {
   const fixture = createFixture(
     "0.130.0",
