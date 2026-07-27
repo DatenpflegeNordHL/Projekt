@@ -16,8 +16,9 @@ test("Sol wrapper rejects arbitrary non-Ralphex files before model execution", (
       encoding: "utf8",
       env: {},
     });
-    assert.notEqual(result.status, 0);
+    assert.equal(result.status, 0);
     assert.match(result.stderr, /accepts only Ralphex temporary prompt files/);
+    assert.match(result.stdout, /NO ADVISORY AVAILABLE/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

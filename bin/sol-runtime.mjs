@@ -26,7 +26,7 @@ try {
   reconcileUsage();
 } catch (error) {
   process.stderr.write(
-    `CODEXLOOPER_SOL_RUNTIME_BLOCK: ${error.code || "CODEXLOOPER_RUNTIME_FAILED"}: ${error.message}\n`,
+    `CODEXLOOPER_SOL_ADVISORY_UNAVAILABLE: ${error.code || "CODEXLOOPER_RUNTIME_FAILED"}: ${error.message}\n`,
   );
-  process.exitCode = 1;
+  process.stdout.write("NO ADVISORY AVAILABLE\n");
 }

@@ -247,6 +247,19 @@ export function reserveModelCall(profile, {
   }
 }
 
+export function reserveCrgBuild({ sourceEnv = process.env, projectRoot = process.cwd(), now = () => Date.now() } = {}) {
+  const budgetPath = configuredBudgetPath(sourceEnv, projectRoot);
+  const release = lock(`${budgetPath}.lock`);
+  try {
+    const state = readRunBudget({ budgetPath, projectRoot });
+    if (now() > state.deadline_at_ms) fail("CODEXLOOPER_BUDGET_DURATION_EXCEEDED", "Run duration budget is exhausted");
+    if (state.crg_builds + 1 > state.limits.max_crg_builds) fail("CODEXLOOPER_BUDGET_CRG_EXCEEDED", "CRG build budget is exhausted");
+    state.crg_builds += 1;
+    writeAtomic(budgetPath, state);
+    return state;
+  } finally { release(); }
+}
+
 export function recordActualEstimatedCost(costUsd, {
   sourceEnv = process.env,
   projectRoot = process.cwd(),

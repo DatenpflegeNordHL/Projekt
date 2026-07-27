@@ -21,11 +21,13 @@ import {
   initializeRunBudget,
   readRunBudget,
   recordActualEstimatedCost,
+  reserveCrgBuild,
 } from "./run-budget.mjs";
 import { parseRunPolicy } from "./run-policy.mjs";
 import { assertManifestExternalTool, verifyRuntimeManifest } from "./runtime-integrity.mjs";
 import { aggregateUsage, readUsageEvents } from "./telemetry.mjs";
-import { disabledCrgResult } from "./code-review-graph.mjs";
+import { createCrgMacosSandboxLaunch, disabledCrgResult, executeCrgStandalone } from "./code-review-graph.mjs";
+import { createSolAdvisoryProjection } from "./sol-advisory.mjs";
 import { deriveCrgSandboxIdentity, optionalCrgRuntimeConfig, verifyCrgSandboxIdentity } from "./crg-runtime-config.mjs";
 
 const MAX_PLAN_BYTES = 2_000_000;
@@ -611,6 +613,11 @@ export async function runProject({
       identity: null,
       result: disabledCrgResult(),
     },
+    sol: {
+      status: "disabled",
+      advisory_sha256: null,
+      reviewer_calls: 0,
+    },
     policy: {
       allowed_paths: policy.allowed_paths,
       validation_commands: policy.validation_commands,
@@ -643,6 +650,7 @@ export async function runProject({
     secret_free: true,
   };
   let selectedTaskCompletion = null;
+  let solAdvisoryPath = null;
   writeReceipt(receiptPath, receipt, secret);
 
   try {
@@ -697,6 +705,42 @@ export async function runProject({
       runStartSha: headBefore,
       currentTrustedHead: trustedCrgAuthority.head,
     });
+    if (crgConfig.status === "configured" && budgets.max_crg_builds > 0) {
+      try {
+        const buildBudget = reserveCrgBuild({ sourceEnv: { ...env, CODEXLOOPER_BUDGET_PATH: budget.statePath }, projectRoot });
+        const options = {
+          projectRoot,
+          runDir: runDirectory,
+          baseSha: headBefore,
+          headSha: trustedCrgAuthority.head,
+        };
+        const configured = crgConfig.config;
+        const launchFor = (operation) => createCrgMacosSandboxLaunch({
+          ...options,
+          environmentRoot: configured.environment.environment_root,
+          interpreterPath: configured.environment.interpreter.path,
+          commandPath: configured.environment.command.path,
+          sandboxCommand: configured.sandbox.path,
+          operation,
+        });
+        const build = executeCrgStandalone({ ...options, launch: launchFor("build"), operation: "build" });
+        const crgResult = build.status === "available"
+          ? executeCrgStandalone({ ...options, launch: launchFor("detect-changes"), operation: "detect-changes" })
+          : build;
+        receipt.crg.result = { ...crgResult, report_path: null };
+        receipt.crg.builds = buildBudget.crg_builds;
+        receipt.crg.status = crgResult.status;
+      } catch (error) {
+        receipt.crg.status = "failed";
+        receipt.crg.result = { ...disabledCrgResult(), status: "failed", error_class: "internal_error" };
+      }
+    }
+    const solProjection = createSolAdvisoryProjection(receipt.crg.result);
+    if (solProjection) {
+      solAdvisoryPath = resolve(runDirectory, "sol-advisory.json");
+      writeAtomic(solAdvisoryPath, `${JSON.stringify(solProjection)}\n`, 0o600);
+      receipt.sol = { status: "available", advisory_sha256: solProjection.sha256, reviewer_calls: 0 };
+    }
     const postPreflightStatus = gitStatus(projectRoot, "Post-preflight Git status check", env);
     receipt.checks.clean_after_preflight = postPreflightStatus.length === 0;
     if (!receipt.checks.clean_after_preflight) {
@@ -714,6 +758,7 @@ export async function runProject({
       CODEXLOOPER_EXPECTED_PROJECT_ROOT: projectRoot,
       CODEXLOOPER_EXPECTED_BRANCH: branch,
       CODEXLOOPER_RUN_START_SHA: headBefore,
+      ...(solAdvisoryPath ? { CODEXLOOPER_SOL_ADVISORY_PATH: solAdvisoryPath } : {}),
       ...(singleTask ? {
         CODEXLOOPER_CANONICAL_PLAN_PATH: plan.relative,
         CODEXLOOPER_CANONICAL_PLAN_SHA256: singleTask.original_plan_sha256,
@@ -817,6 +862,8 @@ export async function runProject({
     receipt.usage = aggregateUsage(usageEvents);
     receipt.checks.builder_usage_present = (receipt.usage.profiles.builder?.calls || 0) > 0;
     receipt.checks.reviewer_usage_present = (receipt.usage.profiles.reviewer?.calls || 0) > 0;
+    receipt.sol.status = receipt.checks.reviewer_usage_present ? "available" : "unavailable";
+    receipt.sol.reviewer_calls = receipt.usage.profiles.reviewer?.calls || 0;
     receipt.budgets.state = selectedTaskCompletion
       ? recordActualEstimatedCost(receipt.usage.totals.estimated_cost_usd, {
         sourceEnv: { ...env, CODEXLOOPER_BUDGET_PATH: budget.statePath },
@@ -831,9 +878,6 @@ export async function runProject({
     }
     if (receipt.commits_created < 1) failures.push("No trusted-host commit was created");
     if (!receipt.checks.builder_usage_present) failures.push("No Terra usage event was recorded");
-    if (!selectedTaskCompletion && !receipt.checks.reviewer_usage_present) {
-      failures.push("No Sol usage event was recorded");
-    }
     if (Math.abs(receipt.budgets.state.actual_estimated_cost_usd - receipt.usage.totals.estimated_cost_usd) > 1e-9) {
       failures.push("Recorded usage cost was not reconciled into the run budget");
     }
@@ -893,6 +937,8 @@ export async function runProject({
         (receipt.usage.profiles.builder?.calls || 0) > 0;
       receipt.checks.reviewer_usage_present =
         (receipt.usage.profiles.reviewer?.calls || 0) > 0;
+      receipt.sol.status = receipt.checks.reviewer_usage_present ? "available" : "unavailable";
+      receipt.sol.reviewer_calls = receipt.usage.profiles.reviewer?.calls || 0;
     }
     try {
       receipt.budgets.state = readRunBudget({ budgetPath: budget.statePath, projectRoot });

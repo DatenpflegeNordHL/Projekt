@@ -446,7 +446,7 @@ projection and append only that projection to the immutable Runtime A Sol review
 prompt. Preserve normal independent review for every valid CRG runtime failure.
 Update focused tests and documentation.
 
-- [ ] Task 7 complete.
+- [x] Task 7 complete.
 
 ## Validation requirements
 
