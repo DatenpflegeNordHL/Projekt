@@ -644,7 +644,8 @@ const run = (args) => execFileSync("/usr/bin/git", args, { encoding: "utf8" });
 if (run(["status", "--porcelain=v1", "--ignored"]) || run(["remote"])) process.exit(41);
 const parents = run(["rev-list", "--parents", "-n", "1", "HEAD"]).trim().split(" ");
 const identity = run(["show", "-s", "--format=%an%n%ae%n%cn%n%ce", "HEAD"]);
-if (parents.length !== 2 || identity !== "CodexLooper Candidate\\ncandidate@codexlooper.invalid\\nCodexLooper Candidate\\ncandidate@codexlooper.invalid\\n") process.exit(42);
+const forbidden = Object.keys(process.env).filter((key) => key === "CLOSEROUTER_API_KEY" || key === "CODEX_HOME" || key.startsWith("CODEXLOOPER_") || key.startsWith("RALPHEX_") || key.startsWith("MEX_") || key.startsWith("GIT_AUTHOR_") || key.startsWith("GIT_COMMITTER_") || key.startsWith("GIT_CONFIG_"));
+if (parents.length !== 2 || identity !== "CodexLooper Candidate\\ncandidate@codexlooper.invalid\\nCodexLooper Candidate\\ncandidate@codexlooper.invalid\\n" || forbidden.length) process.exit(42);
 `,
     );
     git(fixture.project, ["add", "check.mjs"]);

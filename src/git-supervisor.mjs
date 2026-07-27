@@ -442,6 +442,24 @@ function isolatedCandidateEnvironment(candidateRoot) {
   };
 }
 
+function candidateValidationEnvironment(candidateRoot) {
+  const home = resolve(candidateRoot, "home");
+  const temporary = resolve(candidateRoot, "tmp");
+  mkdirSync(temporary, { recursive: false, mode: 0o700 });
+  chmodSync(temporary, 0o700);
+  return {
+    HOME: home,
+    PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+    TMPDIR: temporary,
+    TMP: temporary,
+    TEMP: temporary,
+    LANG: "C",
+    LC_ALL: "C",
+    LC_CTYPE: "C",
+    TZ: "UTC",
+  };
+}
+
 function candidateRoot() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "codexlooper-candidate-")));
   chmodSync(root, 0o700);
@@ -606,7 +624,12 @@ function prepareCompletionCandidate({ root, patch, declared, policy, sourceEnv, 
     assertCandidateCommit(candidate, env, start, expectedTree);
     const validation = runValidationCommands(candidate, policy.validation_commands, policy.allowed_paths, env);
     const checks = validation.map((entry) => ({ ...entry, gate: "plan_validation" }));
-    const fullProjectCheck = runFullProjectCandidateCheck(candidate, policy, sourceEnv, env);
+    const fullProjectCheck = runFullProjectCandidateCheck(
+      candidate,
+      policy,
+      sourceEnv,
+      candidateValidationEnvironment(temporary),
+    );
     if (fullProjectCheck) checks.push({ ...fullProjectCheck, gate: "full_project_check" });
     assertCandidateClean(candidate, env, "Candidate post-validation clean verification");
     result = {

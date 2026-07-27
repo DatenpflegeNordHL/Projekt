@@ -429,7 +429,7 @@ test("a failed isolated candidate check retains redacted failure streams and sup
   enableCandidateCheck(
     current,
     `#!/usr/bin/env node
-process.stderr.write("é".repeat(10000) + " npm notice closerouter_test_secret\\n");
+process.stderr.write("é".repeat(10000) + " npm notice closerouter_test_secret " + process.cwd() + "\\n");
 process.stdout.write("é".repeat(10000) + "\\n✖ AssertionError: expected candidate validation to pass\\n");
 process.exit(1);
 `,
@@ -447,7 +447,9 @@ process.exit(1);
     assert.equal(artifact.exit_status, 1);
     assert.match(artifact.stdout, /AssertionError/u);
     assert.match(artifact.stderr, /npm notice/u);
+    assert.match(artifact.stderr, /<candidate>/u);
     assert.equal(readFileSync(artifactPath, "utf8").includes("closerouter_test_secret"), false);
+    assert.equal(readFileSync(artifactPath, "utf8").includes("codexlooper-candidate-"), false);
     assert.equal(statSync(artifactPath).mode & 0o777, 0o600);
     assert.ok(statSync(artifactPath).size <= 20_000);
     assert.equal(artifact.stdout_truncated, true);
