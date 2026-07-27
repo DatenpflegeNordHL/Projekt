@@ -62,6 +62,28 @@ test("permits only the private report delta around standalone execution", () => 
   });
 });
 
+test("permits writes only in the sealed CRG cache data directory", () => {
+  withFixture((value) => {
+    const cache = resolve(value.project, ".codexlooper", "crg-cache");
+    const data = resolve(cache, "a".repeat(64) + ".data");
+    mkdirSync(data, { recursive: true, mode: 0o700 });
+    chmodSync(cache, 0o700);
+    chmodSync(data, 0o700);
+    const result = executeCrgStandalone({
+      launch: value.launch,
+      operation: "build",
+      projectRoot: value.project,
+      runDir: value.run,
+      dataDir: data,
+      spawnSyncImpl: () => {
+        writeFileSync(resolve(data, "graph"), "sealed\n", { mode: 0o600 });
+        return { status: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+      },
+    });
+    assert.equal(result.status, "available");
+  });
+});
+
 test("fails closed for tracked, untracked, deleted, renamed, mode, symlink, and Git metadata mutations", () => {
   const mutations = [
     (value) => writeFileSync(resolve(value.project, "tracked.txt"), "changed\n"),

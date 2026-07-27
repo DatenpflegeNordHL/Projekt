@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 
 function fail(message) { const error = new Error(message); error.code = "CODEXLOOPER_CRG_CACHE_INTEGRITY"; throw error; }
@@ -17,8 +17,8 @@ function safeDirectory(path) {
 }
 
 export function crgCacheKey({ projectRoot, identity, policyVersion = "crg-v1" } = {}) {
-  if (!isAbsolute(projectRoot) || !identity?.config_sha256 || !identity?.profile_sha256 || !identity?.current_trusted_head) fail("CRG cache key inputs are invalid");
-  return hash(JSON.stringify({ projectRoot, config: identity.config_sha256, environment: identity.environment_sha256, sandbox: identity.sandbox_sha256, profile: identity.profile_sha256, head: identity.current_trusted_head, policyVersion }));
+  if (!isAbsolute(projectRoot) || !identity?.config_sha256 || !identity?.environment_sha256 || !identity?.sandbox_sha256 || !identity?.current_trusted_head) fail("CRG cache key inputs are invalid");
+  return hash(JSON.stringify({ projectRoot, config: identity.config_sha256, environment: identity.environment_sha256, sandbox: identity.sandbox_sha256, head: identity.current_trusted_head, policyVersion }));
 }
 
 export function readCrgBuildCache({ projectRoot, key } = {}) {
@@ -49,6 +49,6 @@ export function writeCrgBuildCache({ projectRoot, key, version } = {}) {
   mkdirSync(cacheDirectory, { recursive: true, mode: 0o700 }); chmodSync(cacheDirectory, 0o700);
   const entry = { key, version, digest: hash(JSON.stringify({ key, version })) };
   const path = resolve(cacheDirectory, `${key}.json`); const temporary = `${path}.tmp-${process.pid}`;
-  try { writeFileSync(temporary, JSON.stringify(entry), { mode: 0o600, flag: "wx" }); chmodSync(temporary, 0o600); renameSync(temporary, path); } finally { rmSync(temporary, { force: true }); }
+  try { writeFileSync(temporary, JSON.stringify(entry), { mode: 0o600, flag: "wx" }); chmodSync(temporary, 0o600); linkSync(temporary, path); } finally { rmSync(temporary, { force: true }); }
   return Object.freeze(entry);
 }

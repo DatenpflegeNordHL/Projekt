@@ -39,6 +39,7 @@ function createFixture(
   mexVersion = "0.6.3",
   {
     ralphexExitAfterBuilder = false,
+    ralphexExitBeforeBuilder = false,
     taskCount = 1,
     repeatBuilderAfterCommit = false,
     canonicalTaskCompletion = true,
@@ -167,6 +168,7 @@ terra="$(sed -n 's/^claude_command = //p' .ralphex/config)"
 sol="$(sed -n 's/^custom_review_script = //p' .ralphex/config)"
 plan_path="\$1"
 builder_calls="\${CODEXLOOPER_RUN_DIR}/builder-calls"
+${ralphexExitBeforeBuilder ? "exit 23" : ""}
 run_builder() {
   printf 'call\n' >> "$builder_calls"
   printf 'Read the plan file at %s and complete the current task.\n' "$plan_path" | "$terra" --print --output-format stream-json --verbose --dangerously-skip-permissions
@@ -209,7 +211,7 @@ function createCrgFixture(fixture) {
   const sandbox = executable(join(root, "sandbox-exec"), `#!/bin/sh
 set -eu
 case "$*" in
-  *detect-changes*) test -f "\${CRG_DATA_DIR}/graph"; echo 'No changes detected.' ;;
+  *detect-changes*) test -f "\${CRG_DATA_DIR}/graph"; printf '%s' 'No changes detected.' ;;
   *build*) mkdir -p "\${CRG_DATA_DIR}"; : > "\${CRG_DATA_DIR}/graph" ;;
   *) echo 'code-review-graph 2.3.6' ;;
 esac
@@ -594,6 +596,42 @@ test("configured runner publishes one private CRG graph build before advisory de
     assert.equal(receipt.crg.result.status, "available");
     assert.equal(receipt.crg.result.report_path, null);
     assert.match(receipt.sol.advisory_sha256, /^[a-f0-9]{64}$/);
+  } finally { removeTree(fixture.root); }
+});
+
+test("configured runner reuses sealed graph data on an independent same-HEAD retry", () => {
+  const fixture = createFixture("0.130.0", "1.6.0", "0.6.3", { ralphexExitBeforeBuilder: true });
+  try {
+    const result = installFixture(fixture, [...createCrgFixture(fixture), "--max-crg-builds", "1"]);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const run = spawnSync(result.runCommand, ["docs/plans/fixture.md"], { cwd: fixture.project, encoding: "utf8", env: modelEnv(), timeout: 120_000 });
+      assert.notEqual(run.status, 0);
+    }
+    const runs = readdirSync(join(fixture.project, ".codexlooper", "runs"), { withFileTypes: true }).filter((entry) => entry.isDirectory());
+    assert.equal(runs.length, 2);
+    const receipts = runs.map((entry) => JSON.parse(readFileSync(join(fixture.project, ".codexlooper", "runs", entry.name, "receipt.json"), "utf8")));
+    assert.deepEqual(receipts.map((receipt) => receipt.crg.builds).sort(), [0, 1]);
+    assert.ok(receipts.every((receipt) => receipt.crg.result.status === "available"));
+  } finally { removeTree(fixture.root); }
+});
+
+test("configured runner selects a distinct sealed CRG cache entry after the trusted HEAD changes", () => {
+  const fixture = createFixture("0.130.0", "1.6.0", "0.6.3", { ralphexExitBeforeBuilder: true });
+  try {
+    const result = installFixture(fixture, [...createCrgFixture(fixture), "--max-crg-builds", "2"]);
+    const first = spawnSync(result.runCommand, ["docs/plans/fixture.md"], { cwd: fixture.project, encoding: "utf8", env: modelEnv(), timeout: 120_000 });
+    assert.notEqual(first.status, 0);
+    git(fixture.project, ["commit", "--allow-empty", "-m", "chore: change trusted head"]);
+    const second = spawnSync(result.runCommand, ["docs/plans/fixture.md"], { cwd: fixture.project, encoding: "utf8", env: modelEnv(), timeout: 120_000 });
+    assert.notEqual(second.status, 0);
+    const runs = readdirSync(join(fixture.project, ".codexlooper", "runs"), { withFileTypes: true }).filter((entry) => entry.isDirectory());
+    const receipts = runs.map((entry) => JSON.parse(readFileSync(join(fixture.project, ".codexlooper", "runs", entry.name, "receipt.json"), "utf8")));
+    assert.equal(runs.length, 2);
+    assert.deepEqual(receipts.map((receipt) => receipt.crg.builds).sort(), [1, 1]);
+    assert.notEqual(receipts[0].crg.identity.current_trusted_head, receipts[1].crg.identity.current_trusted_head);
+    assert.ok(receipts.every((receipt) => receipt.crg.result.status === "available"));
+    const cache = readdirSync(join(fixture.project, ".codexlooper", "crg-cache")).filter((name) => name.endsWith(".data"));
+    assert.equal(cache.length, 2);
   } finally { removeTree(fixture.root); }
 });
 

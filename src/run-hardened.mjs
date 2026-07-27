@@ -27,7 +27,7 @@ import { parseRunPolicy } from "./run-policy.mjs";
 import { assertManifestExternalTool, verifyRuntimeManifest } from "./runtime-integrity.mjs";
 import { aggregateUsage, readUsageEvents } from "./telemetry.mjs";
 import { createCrgMacosSandboxLaunch, disabledCrgResult, executeCrgStandalone } from "./code-review-graph.mjs";
-import { createSolAdvisoryProjection } from "./sol-advisory.mjs";
+import { createSolAdvisoryProjection, dispatchSolAdvisory } from "./sol-advisory.mjs";
 import { crgCacheDataDirectory, crgCacheKey, readCrgBuildCache, writeCrgBuildCache } from "./crg-cache.mjs";
 import { deriveCrgSandboxIdentity, optionalCrgRuntimeConfig, verifyCrgSandboxIdentity } from "./crg-runtime-config.mjs";
 
@@ -652,6 +652,7 @@ export async function runProject({
   };
   let selectedTaskCompletion = null;
   let solAdvisoryPath = null;
+  let solProjection = null;
   writeReceipt(receiptPath, receipt, secret);
 
   try {
@@ -740,11 +741,11 @@ export async function runProject({
         receipt.crg.status = crgResult.status;
       }
     }
-    const solProjection = createSolAdvisoryProjection(receipt.crg.result);
+    solProjection = createSolAdvisoryProjection(receipt.crg.result);
     if (solProjection) {
       solAdvisoryPath = resolve(runDirectory, "sol-advisory.json");
       writeAtomic(solAdvisoryPath, `${JSON.stringify(solProjection)}\n`, 0o600);
-      receipt.sol = { status: "available", advisory_sha256: solProjection.sha256, reviewer_calls: 0 };
+      receipt.sol = await dispatchSolAdvisory({ projection: solProjection });
     }
     const postPreflightStatus = gitStatus(projectRoot, "Post-preflight Git status check", env);
     receipt.checks.clean_after_preflight = postPreflightStatus.length === 0;
@@ -867,8 +868,10 @@ export async function runProject({
     receipt.usage = aggregateUsage(usageEvents);
     receipt.checks.builder_usage_present = (receipt.usage.profiles.builder?.calls || 0) > 0;
     receipt.checks.reviewer_usage_present = (receipt.usage.profiles.reviewer?.calls || 0) > 0;
-    receipt.sol.status = receipt.checks.reviewer_usage_present ? "available" : "unavailable";
-    receipt.sol.reviewer_calls = receipt.usage.profiles.reviewer?.calls || 0;
+    receipt.sol = await dispatchSolAdvisory({
+      projection: solProjection,
+      execute: () => ({ status: receipt.checks.reviewer_usage_present ? "available" : "unavailable", reviewer_calls: receipt.usage.profiles.reviewer?.calls || 0 }),
+    });
     receipt.budgets.state = selectedTaskCompletion
       ? recordActualEstimatedCost(receipt.usage.totals.estimated_cost_usd, {
         sourceEnv: { ...env, CODEXLOOPER_BUDGET_PATH: budget.statePath },
@@ -942,8 +945,10 @@ export async function runProject({
         (receipt.usage.profiles.builder?.calls || 0) > 0;
       receipt.checks.reviewer_usage_present =
         (receipt.usage.profiles.reviewer?.calls || 0) > 0;
-      receipt.sol.status = receipt.checks.reviewer_usage_present ? "available" : "unavailable";
-      receipt.sol.reviewer_calls = receipt.usage.profiles.reviewer?.calls || 0;
+      receipt.sol = await dispatchSolAdvisory({
+        projection: solProjection,
+        execute: () => ({ status: receipt.checks.reviewer_usage_present ? "available" : "unavailable", reviewer_calls: receipt.usage.profiles.reviewer?.calls || 0 }),
+      });
     }
     try {
       receipt.budgets.state = readRunBudget({ budgetPath: budget.statePath, projectRoot });

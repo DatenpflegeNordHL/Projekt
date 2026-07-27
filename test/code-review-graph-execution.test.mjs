@@ -53,16 +53,16 @@ test("executes only the shell-free launch contract and stores a redacted private
       },
     });
     assert.equal(result.status, "available");
-    assert.equal(result.report_path, ".codexlooper/runs/run-1/crg-report.json");
+    assert.equal(result.report_path, ".codexlooper/runs/run-1/crg-version-report.json");
     assert.equal(invocation.command, "/usr/bin/true");
     assert.deepEqual(invocation.args, []);
     assert.equal(invocation.options.shell, false);
     assert.equal(invocation.options.cwd, value.project);
     assert.equal(invocation.options.env.CLOSEROUTER_API_KEY, undefined);
-    const report = readFileSync(resolve(value.run, "crg-report.json"), "utf8");
+    const report = readFileSync(resolve(value.run, "crg-version-report.json"), "utf8");
     assert.equal(report.includes("secret-value"), false);
     assert.match(report, /\[REDACTED\]/u);
-    assert.equal(statSync(resolve(value.run, "crg-report.json")).mode & 0o777, 0o600);
+    assert.equal(statSync(resolve(value.run, "crg-version-report.json")).mode & 0o777, 0o600);
   });
 });
 
@@ -70,7 +70,7 @@ test("classifies timeout, output and non-zero failures without a real CRG proces
   withFixture((value) => {
     const timeout = execute(value, { spawnSyncImpl: () => ({ error: { code: "ETIMEDOUT" } }) });
     assert.equal(timeout.error_class, "timeout");
-    assert.equal(timeout.report_path, ".codexlooper/runs/run-1/crg-report.json");
+    assert.equal(timeout.report_path, ".codexlooper/runs/run-1/crg-version-report.json");
   });
   withFixture((value) => {
     const output = execute(value, {

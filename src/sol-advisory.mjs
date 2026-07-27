@@ -15,6 +15,28 @@ function digest(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+// This is deliberately a receipt projection, not a reviewer transport.  The
+// runner's fixed Ralphex/Sol binding remains the only production execution
+// path; tests can supply a result source without gaining a runtime override.
+export async function dispatchSolAdvisory({ projection = null, execute } = {}) {
+  const advisorySha256 = projection?.sha256 ?? null;
+  if (projection !== null && (typeof advisorySha256 !== "string" || !/^[a-f0-9]{64}$/u.test(advisorySha256))) {
+    fail("Sol advisory projection digest is invalid");
+  }
+  if (typeof execute !== "function") {
+    return Object.freeze({ status: "unavailable", advisory_sha256: advisorySha256, reviewer_calls: 0 });
+  }
+  try {
+    const result = await execute(Object.freeze({ advisory_sha256: advisorySha256 }));
+    if (!result || result.status !== "available" || result.reviewer_calls !== 1) {
+      return Object.freeze({ status: "unavailable", advisory_sha256: advisorySha256, reviewer_calls: 0 });
+    }
+    return Object.freeze({ status: "available", advisory_sha256: advisorySha256, reviewer_calls: 1 });
+  } catch {
+    return Object.freeze({ status: "unavailable", advisory_sha256: advisorySha256, reviewer_calls: 0 });
+  }
+}
+
 export function createSolAdvisoryProjection(crgResult) {
   if (crgResult?.status !== "available" || !crgResult.advisory) return null;
   const advisory = projectCrgAdvisory(crgResult.advisory);

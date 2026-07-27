@@ -432,7 +432,22 @@ export function validateCrgPrivatePaths({ projectRoot, runDir, homeDir, dataDir 
   const project = canonicalDirectory(projectRoot, "Project root");
   const run = canonicalDirectory(runDir, "CRG private run directory");
   const home = assertBelow(run, homeDir ?? resolve(run, "crg-home"), "CRG home directory");
-  const data = assertBelow(run, dataDir ?? resolve(run, "crg-data"), "CRG data directory");
+  const candidateData = dataDir ?? resolve(run, "crg-data");
+  const cacheRoot = resolve(project, ".codexlooper", "crg-cache");
+  let data;
+  if (relativeInside(run, candidateData)) {
+    data = assertBelow(run, candidateData, "CRG data directory");
+  } else {
+    const canonicalCacheRoot = canonicalDirectory(cacheRoot, "CRG cache root");
+    const canonicalData = canonicalDirectory(candidateData, "CRG cache data directory");
+    if (canonicalCacheRoot !== cacheRoot || !relativeInside(canonicalCacheRoot, canonicalData)) {
+      foundationFail("CODEXLOOPER_CRG_PRIVATE_PATH_INVALID", "CRG cache data directory must stay below the sealed cache root");
+    }
+    if ((lstatSync(canonicalData).mode & 0o077) !== 0) {
+      foundationFail("CODEXLOOPER_CRG_PRIVATE_PATH_INVALID", "CRG cache data directory must be private");
+    }
+    data = canonicalData;
+  }
   return Object.freeze({ project_root: project, run_dir: run, home_dir: home, data_dir: data });
 }
 
@@ -514,6 +529,7 @@ function createCrgMacosSandboxProfile({ paths, environmentRoot, interpreterPath,
       "(allow process*)",
       ...readable.map((path) => `(allow file-read* (subpath ${sandboxLiteral(path)}))`),
       `(allow file-write* (subpath ${sandboxLiteral(paths.run_dir)}))`,
+      ...(paths.data_dir === paths.run_dir ? [] : [`(allow file-write* (subpath ${sandboxLiteral(paths.data_dir)}))`]),
     ].join("\n"),
   };
 }
@@ -628,7 +644,7 @@ function failedExecution(errorClass, duration, { reportPath = null, truncated = 
 }
 
 function writePrivateCrgReport({ projectRoot, runDir, operation, stdout, stderr, outcome, maxBytes }) {
-  const report = assertBelow(runDir, resolve(runDir, "crg-report.json"), "CRG report path");
+  const report = assertBelow(runDir, resolve(runDir, `crg-${operation}-report.json`), "CRG report path");
   const reportPath = relative(projectRoot, report).split(sep).join("/");
   validateReportPath(reportPath);
   const payload = Buffer.from(JSON.stringify({
@@ -646,11 +662,12 @@ function writePrivateCrgReport({ projectRoot, runDir, operation, stdout, stderr,
   return { report_path: reportPath, truncated: false };
 }
 
-function repositoryEntries(root) {
+function repositoryEntries(root, { mutableDirectories = [] } = {}) {
   const entries = new Map();
   const visit = (directory) => {
     for (const name of readdirSync(directory).sort((left, right) => left.localeCompare(right))) {
       const path = resolve(directory, name);
+      if (mutableDirectories.some((mutable) => path === mutable || relativeInside(mutable, path))) continue;
       const relativePath = relative(root, path).split(sep).join("/");
       const stat = lstatSync(path);
       if (stat.isDirectory()) {
@@ -674,16 +691,19 @@ function repositoryEntries(root) {
   return entries;
 }
 
-export function captureCrgRepositoryState({ projectRoot, runDir } = {}) {
-  const project = canonicalDirectory(projectRoot, "Project root");
-  const run = canonicalDirectory(runDir, "CRG private run directory");
+export function captureCrgRepositoryState({ projectRoot, runDir, dataDir } = {}) {
+  const paths = validateCrgPrivatePaths({ projectRoot, runDir, dataDir });
+  const project = paths.project_root;
+  const run = paths.run_dir;
   if (!relativeInside(project, run) || !relative(project, run).split(sep).join("/").startsWith(".codexlooper/runs/")) {
     foundationFail("CODEXLOOPER_CRG_PRIVATE_PATH_INVALID", "CRG private run directory must stay below .codexlooper/runs");
   }
+  const mutableDirectories = [paths.data_dir];
   return Object.freeze({
     project_root: project,
     run_dir: run,
-    entries: repositoryEntries(project),
+    mutable_directories: Object.freeze(mutableDirectories),
+    entries: repositoryEntries(project, { mutableDirectories }),
   });
 }
 
@@ -696,11 +716,16 @@ export function verifyCrgRepositoryState(snapshot) {
   if (project !== snapshot.project_root || run !== snapshot.run_dir) {
     foundationFail("CODEXLOOPER_CRG_REPOSITORY_MUTATION", "CRG repository paths changed after state capture");
   }
-  const actual = repositoryEntries(project);
-  const reportPath = relative(project, resolve(run, "crg-report.json")).split(sep).join("/");
-  if (!snapshot.entries.has(reportPath)) {
-    const report = actual.get(reportPath);
-    if (report?.type === "file" && report.mode === 0o600) actual.delete(reportPath);
+  if (!Array.isArray(snapshot.mutable_directories) || snapshot.mutable_directories.some((path) => typeof path !== "string" || !relativeInside(project, path))) {
+    foundationFail("CODEXLOOPER_CRG_REPOSITORY_MUTATION", "CRG repository snapshot mutable directories are invalid");
+  }
+  const actual = repositoryEntries(project, { mutableDirectories: snapshot.mutable_directories });
+  for (const operation of ["version", "build", "detect-changes"]) {
+    const reportPath = relative(project, resolve(run, `crg-${operation}-report.json`)).split(sep).join("/");
+    if (!snapshot.entries.has(reportPath)) {
+      const report = actual.get(reportPath);
+      if (report?.type === "file" && report.mode === 0o600) actual.delete(reportPath);
+    }
   }
   if (actual.size !== snapshot.entries.size) {
     foundationFail("CODEXLOOPER_CRG_REPOSITORY_MUTATION", "CRG changed repository entries outside private report storage");
