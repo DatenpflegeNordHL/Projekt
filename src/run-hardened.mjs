@@ -25,6 +25,8 @@ import {
 import { parseRunPolicy } from "./run-policy.mjs";
 import { assertManifestExternalTool, verifyRuntimeManifest } from "./runtime-integrity.mjs";
 import { aggregateUsage, readUsageEvents } from "./telemetry.mjs";
+import { disabledCrgResult } from "./code-review-graph.mjs";
+import { deriveCrgSandboxIdentity, optionalCrgRuntimeConfig } from "./crg-runtime-config.mjs";
 
 const MAX_PLAN_BYTES = 2_000_000;
 const SAFE_ENV_KEYS = [
@@ -564,6 +566,9 @@ export async function runProject({
     now: () => now().getTime(),
   });
   const started = now();
+  const crgConfig = optionalCrgRuntimeConfig(env);
+  const crgIdentity = deriveCrgSandboxIdentity({ configured: crgConfig, projectRoot, runDirectory, runStartSha: headBefore });
+  const crgReason = crgConfig.status === "unconfigured" ? "unconfigured" : budgets.max_crg_builds === 0 ? "budget_zero" : "policy_denied";
   const receipt = {
     schema: "codexlooper.run.v2",
     run_id: id,
@@ -599,6 +604,14 @@ export async function runProject({
       integrity_verified: true,
     },
     budgets: { limits: budgets, state: budget.state },
+    crg: {
+      status: crgConfig.status === "unconfigured" ? "disabled" : "configured",
+      reason: crgReason,
+      builds: budget.state.crg_builds,
+      max_builds: budgets.max_crg_builds,
+      identity: crgIdentity,
+      result: disabledCrgResult(),
+    },
     policy: {
       allowed_paths: policy.allowed_paths,
       validation_commands: policy.validation_commands,

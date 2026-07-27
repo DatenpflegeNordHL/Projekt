@@ -39,6 +39,8 @@ export const RUNTIME_FILES = Object.freeze([
   "src/builder-snapshot.mjs",
   "src/git-supervisor.mjs",
   "src/codex-diagnostics.mjs",
+  "src/code-review-graph.mjs",
+  "src/crg-runtime-config.mjs",
   "src/telemetry.mjs",
   "src/run-hardened.mjs",
   "src/run.mjs",

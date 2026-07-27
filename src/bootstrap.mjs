@@ -28,6 +28,10 @@ const OPTIONAL_ARGUMENTS = new Set([
   "--max-estimated-cost-usd",
   "--model-call-reserve-usd",
   "--max-crg-builds",
+  "--crg-environment",
+  "--crg-interpreter",
+  "--crg-command",
+  "--crg-sandbox",
 ]);
 const ALLOWED_ARGUMENTS = new Set([...REQUIRED_ARGUMENTS, ...OPTIONAL_ARGUMENTS]);
 const MAX_TOOL_OUTPUT = 12_000;
@@ -323,6 +327,7 @@ export function bootstrap(argv = process.argv.slice(2), { sourceEnv = process.en
       manifest_sha256: installed.runtimeManifestSha256,
     },
     budgets: installed.budgets,
+    crg: installed.crg,
     secret_free: true,
   };
   const receiptPath = writeReceipt(project, receipt);

@@ -200,6 +200,16 @@ function installFixture(fixture, extra = []) {
   ]);
 }
 
+function createCrgFixture(fixture) {
+  const root = realpathSync(fixture.root);
+  const environment = join(root, "crg-environment");
+  mkdirSync(join(environment, "bin"), { recursive: true });
+  const interpreter = executable(join(environment, "bin", "python"), "#!/bin/sh\nexit 0\n");
+  const command = executable(join(environment, "bin", "crg"), "#!/bin/sh\nexit 0\n");
+  const sandbox = executable(join(root, "sandbox-exec"), "#!/bin/sh\nexit 0\n");
+  return ["--crg-environment", environment, "--crg-interpreter", interpreter, "--crg-command", command, "--crg-sandbox", sandbox];
+}
+
 function modelEnv(extra = {}) {
   return {
     ...process.env,
@@ -285,6 +295,46 @@ test("preflight validates immutable runtime, MEX, Codex and Ralphex", () => {
       "CODEXLOOPER_PREFLIGHT=PASS",
     );
   } finally {
+    removeTree(fixture.root);
+  }
+});
+
+test("configured CRG is sealed for the runner only and preflight rejects tampering", () => {
+  const fixture = createFixture();
+  const priorConfig = process.env.CODEXLOOPER_CRG_CONFIG;
+  const priorDigest = process.env.CODEXLOOPER_CRG_CONFIG_SHA256;
+  try {
+    const installed = installFixture(fixture, createCrgFixture(fixture));
+    assert.equal(installed.crg.status, "configured");
+    const runWrapper = readFileSync(installed.runCommand, "utf8");
+    assert.match(runWrapper, /CODEXLOOPER_CRG_CONFIG=/);
+    for (const path of [installed.controlledCodex, installed.terraExecutor, installed.solReviewer, installed.ralphexVcsGuard]) {
+      assert.doesNotMatch(readFileSync(path, "utf8"), /CODEXLOOPER_CRG_CONFIG/);
+    }
+    process.env.CODEXLOOPER_CRG_CONFIG = join(fixture.project, ".codexlooper", "crg-runtime-config.json");
+    process.env.CODEXLOOPER_CRG_CONFIG_SHA256 = installed.crg.configSha256;
+    assert.equal(runPreflight([
+      "--project", fixture.project,
+      "--mex-command", fixture.mex,
+      "--real-codex", fixture.codex,
+      "--ralphex-command", fixture.ralphex,
+      "--runtime-manifest", installed.runtimeManifest,
+      "--runtime-manifest-sha256", installed.runtimeManifestSha256,
+    ]), "CODEXLOOPER_PREFLIGHT=PASS");
+    writeFileSync(process.env.CODEXLOOPER_CRG_CONFIG, "tampered\n");
+    assert.throws(() => runPreflight([
+      "--project", fixture.project,
+      "--mex-command", fixture.mex,
+      "--real-codex", fixture.codex,
+      "--ralphex-command", fixture.ralphex,
+      "--runtime-manifest", installed.runtimeManifest,
+      "--runtime-manifest-sha256", installed.runtimeManifestSha256,
+    ]), /CRG config digest/);
+  } finally {
+    if (priorConfig === undefined) delete process.env.CODEXLOOPER_CRG_CONFIG;
+    else process.env.CODEXLOOPER_CRG_CONFIG = priorConfig;
+    if (priorDigest === undefined) delete process.env.CODEXLOOPER_CRG_CONFIG_SHA256;
+    else process.env.CODEXLOOPER_CRG_CONFIG_SHA256 = priorDigest;
     removeTree(fixture.root);
   }
 });

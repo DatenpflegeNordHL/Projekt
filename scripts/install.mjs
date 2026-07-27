@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   readFileSync,
@@ -14,6 +15,7 @@ import {
   installImmutableRuntime,
 } from "../src/runtime-integrity.mjs";
 import { ensurePrivateDirectoryChain } from "../src/runtime-paths.mjs";
+import { createCrgRuntimeConfig, serializeCrgRuntimeConfig } from "../src/crg-runtime-config.mjs";
 
 const THIS_FILE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(THIS_FILE), "..");
@@ -30,6 +32,10 @@ const OPTIONAL_ARGUMENTS = new Set([
   "--max-estimated-cost-usd",
   "--model-call-reserve-usd",
   "--max-crg-builds",
+  "--crg-environment",
+  "--crg-interpreter",
+  "--crg-command",
+  "--crg-sandbox",
 ]);
 const ALLOWED_ARGUMENTS = new Set([...REQUIRED_ARGUMENTS, ...OPTIONAL_ARGUMENTS]);
 const MODEL_ID = /^[a-z0-9._-]+\/[a-z0-9._-]+$/i;
@@ -212,7 +218,7 @@ function ensureLocalGitExcludes(project) {
   writeAtomic(excludePath, `${existing}${prefix}${missing.join("\n")}\n`, 0o600);
 }
 
-function runtimeExports(runtime, budgets) {
+function runtimeExports(runtime, budgets, crg = null) {
   return [
     `export CODEXLOOPER_RUNTIME_DIR=${shellQuote(runtime.runtimeDirectory)}`,
     `export CODEXLOOPER_RUNTIME_MANIFEST=${shellQuote(runtime.manifestPath)}`,
@@ -224,6 +230,10 @@ function runtimeExports(runtime, budgets) {
     `export CODEXLOOPER_MAX_ESTIMATED_COST_USD=${shellQuote(String(budgets.max_estimated_cost_usd))}`,
     `export CODEXLOOPER_MODEL_CALL_RESERVE_USD=${shellQuote(String(budgets.model_call_reserve_usd))}`,
     `export CODEXLOOPER_MAX_CRG_BUILDS=${shellQuote(String(budgets.max_crg_builds))}`,
+    ...(crg ? [
+      `export CODEXLOOPER_CRG_CONFIG=${shellQuote(crg.path)}`,
+      `export CODEXLOOPER_CRG_CONFIG_SHA256=${shellQuote(crg.sha256)}`,
+    ] : []),
   ].join("\n");
 }
 
@@ -255,9 +265,10 @@ function runWrapperScript({
   reviewReasoning,
   runtime,
   budgets,
+  crg,
 }) {
   const runner = resolve(runtime.runtimeDirectory, "scripts", "run.mjs");
-  return `#!/bin/sh\nset -eu\ncd ${shellQuote(project)}\nexport CODEXLOOPER_PROJECT=${shellQuote(project)}\nexport CODEXLOOPER_REAL_CODEX=${shellQuote(realCodex)}\nexport CODEXLOOPER_NPM_CLI=${shellQuote(npmCli)}\nexport CODEXLOOPER_MEX_COMMAND=${shellQuote(mexCommand)}\nexport CODEXLOOPER_RALPHEX_COMMAND=${shellQuote(ralphexCommand)}\nexport CODEXLOOPER_BUILDER_MODEL=${shellQuote(builderModel)}\nexport CODEXLOOPER_REVIEW_MODEL=${shellQuote(reviewModel)}\nexport CODEXLOOPER_BUILDER_REASONING=${shellQuote(builderReasoning)}\nexport CODEXLOOPER_REVIEW_REASONING=${shellQuote(reviewReasoning)}\n${runtimeExports(runtime, budgets)}\nexec ${shellQuote(process.execPath)} ${shellQuote(runner)} "$@"\n`;
+  return `#!/bin/sh\nset -eu\ncd ${shellQuote(project)}\nexport CODEXLOOPER_PROJECT=${shellQuote(project)}\nexport CODEXLOOPER_REAL_CODEX=${shellQuote(realCodex)}\nexport CODEXLOOPER_NPM_CLI=${shellQuote(npmCli)}\nexport CODEXLOOPER_MEX_COMMAND=${shellQuote(mexCommand)}\nexport CODEXLOOPER_RALPHEX_COMMAND=${shellQuote(ralphexCommand)}\nexport CODEXLOOPER_BUILDER_MODEL=${shellQuote(builderModel)}\nexport CODEXLOOPER_REVIEW_MODEL=${shellQuote(reviewModel)}\nexport CODEXLOOPER_BUILDER_REASONING=${shellQuote(builderReasoning)}\nexport CODEXLOOPER_REVIEW_REASONING=${shellQuote(reviewReasoning)}\n${runtimeExports(runtime, budgets, crg)}\nexec ${shellQuote(process.execPath)} ${shellQuote(runner)} "$@"\n`;
 }
 
 function vcsWrapperScript({ project, runtime, budgets }) {
@@ -277,6 +288,8 @@ export function install(argv = process.argv.slice(2)) {
   const builderReasoning = args["--builder-reasoning"];
   const reviewReasoning = args["--review-reasoning"];
   const budgets = parseBudgets(args);
+  const crgValues = [args["--crg-environment"], args["--crg-interpreter"], args["--crg-command"], args["--crg-sandbox"]];
+  if (crgValues.some(Boolean) && crgValues.some((value) => !value)) fail("CRG configuration requires environment, interpreter, command and sandbox");
 
   if (!ALLOWED_REASONING.has(builderReasoning) || !ALLOWED_REASONING.has(reviewReasoning)) {
     fail("Reasoning must be low, medium or high");
@@ -323,6 +336,18 @@ export function install(argv = process.argv.slice(2)) {
   });
 
   const home = resolve(project, ".codexlooper");
+  let crg = null;
+  if (crgValues.every(Boolean)) {
+    const content = serializeCrgRuntimeConfig(createCrgRuntimeConfig({
+      environmentRoot: args["--crg-environment"],
+      interpreterPath: args["--crg-interpreter"],
+      commandPath: args["--crg-command"],
+      sandboxCommand: args["--crg-sandbox"],
+    }));
+    const path = resolve(home, "crg-runtime-config.json");
+    writeAtomic(path, content, 0o600);
+    crg = { path, sha256: createHash("sha256").update(content).digest("hex") };
+  }
   const controlledCodex = resolve(binDir, "codex");
   const terraExecutor = resolve(binDir, "terra-executor");
   const solReviewer = resolve(binDir, "sol-review");
@@ -389,6 +414,7 @@ export function install(argv = process.argv.slice(2)) {
       reviewReasoning,
       runtime,
       budgets,
+      crg,
     }),
     0o500,
   );
@@ -421,6 +447,7 @@ export function install(argv = process.argv.slice(2)) {
       node: runtime.manifest.node,
     },
     budgets,
+    crg: crg ? { status: "configured", config_sha256: crg.sha256 } : { status: "unconfigured" },
     builder: { model: builderModel, reasoning: builderReasoning, role: "implementation_and_fixes" },
     reviewer: { model: reviewModel, reasoning: reviewReasoning, role: "read_only_findings" },
   };
@@ -439,6 +466,7 @@ export function install(argv = process.argv.slice(2)) {
     runtimeId: runtime.runtimeId,
     branchPolicy: BRANCH_POLICY,
     budgets,
+    crg: crg ? { status: "configured", configSha256: crg.sha256 } : { status: "unconfigured" },
   };
 }
 

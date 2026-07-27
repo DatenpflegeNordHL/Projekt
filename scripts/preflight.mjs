@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { assertGitAuthority } from "../src/git-authority.mjs";
 import { assertManifestExternalTool, verifyRuntimeManifest } from "../src/runtime-integrity.mjs";
+import { optionalCrgRuntimeConfig } from "../src/crg-runtime-config.mjs";
 
 const THIS_FILE = fileURLToPath(import.meta.url);
 const REQUIRED_ARGUMENTS = ["--project", "--mex-command", "--real-codex", "--ralphex-command"];
@@ -125,6 +126,7 @@ export function runPreflight(argv = process.argv.slice(2)) {
   if (!manifestPath || !manifestSha256) fail("Immutable runtime manifest evidence is required");
 
   const runtime = verifiedRuntime(manifestPath, manifestSha256);
+  optionalCrgRuntimeConfig(process.env);
   const mex = assertManifestExternalTool(runtime.manifest, "mex", configuredMex);
   const codex = assertManifestExternalTool(runtime.manifest, "codex", configuredCodex);
   const ralphex = assertManifestExternalTool(runtime.manifest, "ralphex", configuredRalphex);

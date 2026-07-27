@@ -437,7 +437,7 @@ run-start SHA and current trusted HEAD. Add secret-free CRG metadata and budget
 state to receipts. Preserve disabled legacy behavior. Do not modify Sol integration
 in this task.
 
-- [ ] Task 6 complete.
+- [x] Task 6 complete.
 
 ### Task 7: Fail-open Sol advisory integration
 
