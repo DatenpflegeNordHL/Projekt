@@ -206,7 +206,14 @@ function createCrgFixture(fixture) {
   mkdirSync(join(environment, "bin"), { recursive: true });
   const interpreter = executable(join(environment, "bin", "python"), "#!/bin/sh\nexit 0\n");
   const command = executable(join(environment, "bin", "crg"), "#!/bin/sh\nexit 0\n");
-  const sandbox = executable(join(root, "sandbox-exec"), "#!/bin/sh\nexit 0\n");
+  const sandbox = executable(join(root, "sandbox-exec"), `#!/bin/sh
+set -eu
+case "$*" in
+  *detect-changes*) test -f "\${CRG_DATA_DIR}/graph"; echo 'No changes detected.' ;;
+  *build*) mkdir -p "\${CRG_DATA_DIR}"; : > "\${CRG_DATA_DIR}/graph" ;;
+  *) echo 'code-review-graph 2.3.6' ;;
+esac
+`);
   return ["--crg-environment", environment, "--crg-interpreter", interpreter, "--crg-command", command, "--crg-sandbox", sandbox];
 }
 
@@ -574,6 +581,20 @@ test("configured runner records only sealed CRG identity and does not execute CR
   } finally {
     removeTree(fixture.root);
   }
+});
+
+test("configured runner publishes one private CRG graph build before advisory detection", () => {
+  const fixture = createFixture();
+  try {
+    const result = installFixture(fixture, [...createCrgFixture(fixture), "--max-crg-builds", "1"]);
+    const run = spawnSync(result.runCommand, ["docs/plans/fixture.md"], { cwd: fixture.project, encoding: "utf8", env: modelEnv(), timeout: 120_000 });
+    assert.equal(run.status, 0, run.stderr);
+    const receipt = JSON.parse(readFileSync(join(onlyRunDirectory(fixture.project), "receipt.json"), "utf8"));
+    assert.equal(receipt.crg.builds, 1);
+    assert.equal(receipt.crg.result.status, "available");
+    assert.equal(receipt.crg.result.report_path, null);
+    assert.match(receipt.sol.advisory_sha256, /^[a-f0-9]{64}$/);
+  } finally { removeTree(fixture.root); }
 });
 
 test("generated runner exposes only a private selected-task plan to Ralphex", () => {
