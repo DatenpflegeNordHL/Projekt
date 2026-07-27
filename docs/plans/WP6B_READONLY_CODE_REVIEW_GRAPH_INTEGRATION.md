@@ -390,7 +390,7 @@ projection, redaction and focused unit tests. Do not use `spawn`, invoke any CRG
 command or sandbox, construct a child environment, or integrate with bootstrap,
 runner or Sol in this task.
 
-- [ ] Task 1 complete.
+- [x] Task 1 complete.
 
 ### Task 2: Sealed adapter foundation
 
