@@ -2,8 +2,8 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, isAbsolute, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import {
   recordCodexDiagnosticLine,
@@ -23,6 +23,7 @@ const MAX_PROMPT_BYTES = 2_000_000;
 const MAX_STDERR_BYTES = 16_384;
 const MAX_TOOL_DIAGNOSTICS = 20;
 const MAX_TOOL_DIAGNOSTIC_TEXT = 8_000;
+const MAX_REJECTED_RESPONSE_BYTES = 65_536;
 
 function fail(message) {
   throw new Error(message);
@@ -100,6 +101,7 @@ function parseLegacySignal(text, phase) {
 
 function parseOperationMessages(messages, phase) {
   let lastError;
+  let rejectedMessage = "";
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const legacy = parseLegacySignal(messages[index], phase);
     if (legacy) return legacy;
@@ -112,9 +114,56 @@ function parseOperationMessages(messages, phase) {
       };
     } catch (error) {
       lastError = error;
+      rejectedMessage = messages[index];
     }
   }
-  throw lastError || new Error("Codex builder returned no usable agent result");
+  const error = lastError || new Error("Codex builder returned no usable agent result");
+  error.rejectedBuilderMessage = rejectedMessage;
+  throw error;
+}
+
+function exactPrivateRunDirectory() {
+  const runDirectory = process.env.CODEXLOOPER_RUN_DIR;
+  const projectRoot = process.env.CODEXLOOPER_PROJECT || process.cwd();
+  if (typeof runDirectory !== "string" || !runDirectory || !isAbsolute(runDirectory)) {
+    fail("Run directory is unavailable for rejected Builder response retention");
+  }
+  const runId = basename(runDirectory);
+  if (!runId || runId === "." || runId === "..") {
+    fail("Run directory is invalid for rejected Builder response retention");
+  }
+  const expected = resolve(projectRoot, ".codexlooper", "runs", runId);
+  if (resolve(runDirectory) !== expected) {
+    fail("Run directory is outside the private CodexLooper run path");
+  }
+  return expected;
+}
+
+function retainRejectedBuilderResponse(message, phase, error) {
+  if (typeof message !== "string" || !message.trim()) return null;
+  const redacted = redactDiagnostic(message);
+  const bytes = Buffer.from(redacted, "utf8");
+  const truncated = bytes.length > MAX_REJECTED_RESPONSE_BYTES;
+  const response = truncated
+    ? bytes.subarray(0, MAX_REJECTED_RESPONSE_BYTES).toString("utf8")
+    : redacted;
+  const artifactPath = resolve(
+    exactPrivateRunDirectory(),
+    `builder-rejected-response-${Date.now()}-${process.pid}.json`,
+  );
+  writeFileSync(
+    artifactPath,
+    `${JSON.stringify({
+      schema: "codexlooper.builder-rejected-response.v1",
+      phase,
+      parser_error: redactDiagnostic(error?.message),
+      truncated,
+      response,
+    })}\n`,
+    { encoding: "utf8", mode: 0o600, flag: "wx" },
+  );
+  chmodSync(artifactPath, 0o600);
+  return artifactPath;
 }
 
 function planCompleted(projectRoot = process.cwd(), sourceEnv = process.env) {
@@ -154,26 +203,21 @@ function hostSignal({ phase, requestedSignal, committed, effectivePatch }) {
 }
 
 function builderEnvelopeV2Guidance(phase) {
-  const phaseSignal =
-    phase === "review"
-      ? "Use REVIEW_DONE only when no issue exists. If you provide a fix patch, use an empty signal."
-      : "Use ALL_TASKS_DONE only when the patch completes every actionable plan item. Otherwise use an empty signal.";
   return `CodexLooper read-only Builder Envelope v2 policy:
 - You are running inside a disposable read-only clone of the repository. The real project is never writable from this session.
 - Inspect files with read-only shell commands, git status, git diff, and git log.
 - The read-only filesystem is intentional. Do not run tests or validation commands inside the model sandbox when they may create temporary files, caches, lockfiles, coverage data, or other writes.
 - Inability to create files or execute write-producing validation inside the snapshot is expected and is not a task blocker. The trusted host performs validation after accepting the patch.
 - Never edit, create, delete, rename, copy, or chmod files. Never run git-mutating commands.
-- Your final response for a non-empty successful result must be exactly one plain JSON object, with no Markdown, prose, code fence, or trailing material.
-- That object must be Builder Envelope v2: {"version":2,"operations":[...]}. Its only top-level fields are version and operations.
+- A response containing changes must be exactly one plain Builder Envelope v2 JSON object, with no Markdown, prose, code fence, signal text, or trailing material.
+- That object is {"version":2,"operations":[...]}. Its only top-level fields are version and operations.
 - Each operation must be either {"type":"create_file","path":"...","content":"...","expected_absent":true} or {"type":"replace_exact","path":"...","expected_file_sha256":"...","old_text":"...","new_text":"...","expected_occurrences":1}.
 - Do not author a Git diff, hunk headers, Apply-Patch markers, or any patch text. Do not run git apply, including git apply --check; the host materializes operations and generates the canonical diff.
 - Re-read every existing replacement target immediately before constructing its expected_file_sha256, old_text, and new_text. The expected_file_sha256 is the lowercase SHA-256 of the complete current UTF-8 file content; old_text must occur exactly once.
-- Every changed path must be permitted by the active plan. For task work, include the canonical plan checkbox change as a replace_exact operation.
+- Every changed path must be permitted by the active plan. A valid non-final task envelope may omit a canonical plan checkbox while work remains. Include its exact checkbox change only in the final envelope that completes the task.
 - Do not mark a task checkbox complete unless the operations cover every requirement and required test category for that task. Tests must be authored as create_file or replace_exact operations even though they cannot be executed inside the read-only model snapshot.
-- ${phaseSignal}
-- Use TASK_FAILED only when the task cannot be completed safely after read-only inspection; when doing so, return exactly <<<RALPHEX:TASK_FAILED>>> with no JSON payload.
-- Never use TASK_FAILED solely because the snapshot is read-only, because files cannot be created there, or because write-producing tests cannot be run there.
+- Never emit Ralphex markers or control signals alongside a Builder Envelope v2 JSON object.
+- The trusted host alone derives continuation and completion from validated operations, canonical plan state, and trusted host commit evidence.
 - Current phase: ${phase}.`;
 }
 
@@ -288,7 +332,13 @@ try {
 
   const snapshotPatch = captureBuilderSnapshotPatch({ snapshot });
   if (snapshotPatch.trim()) fail("Read-only Codex builder modified the isolated snapshot");
-  const envelope = parseOperationMessages(agentMessages, phase);
+  let envelope;
+  try {
+    envelope = parseOperationMessages(agentMessages, phase);
+  } catch (error) {
+    retainRejectedBuilderResponse(error.rejectedBuilderMessage, phase, error);
+    throw error;
+  }
   let supervised = { committed: false };
   let effectivePatch = "";
   if (envelope.signal !== "<<<RALPHEX:TASK_FAILED>>>") {
