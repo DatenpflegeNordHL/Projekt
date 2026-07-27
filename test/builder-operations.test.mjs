@@ -302,6 +302,39 @@ test("rejects unsafe project-relative POSIX paths", () => {
   }
 });
 
+test("reserves .git path components in operations and baselines", () => {
+  for (const path of [
+    ".git",
+    ".git/config",
+    "src/.git/x",
+    "src/nested/.git/config",
+  ]) {
+    assert.throws(
+      () => validateBuilderOperationEnvelope(envelope(create(path))),
+      (error) => error.code === "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+      path,
+    );
+    assert.throws(
+      () => materializeBuilderOperations({ [path]: "" }, envelope(create())),
+      (error) => error.code === "CODEXLOOPER_BUILDER_BASELINE_INVALID",
+      path,
+    );
+  }
+
+  assert.equal(
+    validateBuilderOperationEnvelope(envelope(create("src/.gitignore"))).operations[0]
+      .path,
+    "src/.gitignore",
+  );
+  assert.equal(
+    materializeBuilderOperations(
+      { "src/.env": "value\n" },
+      envelope(create("src/created.mjs")),
+    ).files.get("src/.env"),
+    "value\n",
+  );
+});
+
 test("rejects lone surrogates in operation and baseline paths or text", () => {
   const original = "export const value = 1;\n";
   for (const surrogate of ["\ud800", "\udfff"]) {

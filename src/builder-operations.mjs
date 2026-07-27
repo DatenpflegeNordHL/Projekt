@@ -228,6 +228,7 @@ function safePath(
           !component ||
           component === "." ||
           component === ".." ||
+          component === ".git" ||
           PROTOTYPE_SENSITIVE_COMPONENTS.has(component),
       )
   ) {
