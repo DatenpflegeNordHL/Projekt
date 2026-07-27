@@ -418,7 +418,7 @@ timeouts, output and report limits, deterministic result handling and private
 report storage, with focused tests. Do not add host runner plumbing or Sol in
 this task.
 
-- [ ] Task 4 complete.
+- [x] Task 4 complete.
 
 ### Task 5: Repository-mutation guards and standalone adapter verification
 

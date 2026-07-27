@@ -10,6 +10,13 @@ export const MAX_TEST_GAP_COUNT = 100_000;
 export const MAX_LINE_NUMBER = 10_000_000;
 export const MIN_RISK_SCORE = 0;
 export const MAX_RISK_SCORE = 100;
+export const CRG_EXECUTION_LIMITS = Object.freeze({
+  version_timeout_ms: 10_000,
+  build_timeout_ms: 120_000,
+  detect_changes_timeout_ms: 30_000,
+  output_bytes: 1_048_576,
+  report_bytes: 65_536,
+});
 
 const RESULT_FIELDS = [
   "status",
@@ -255,8 +262,10 @@ const {
   readdirSync,
   readlinkSync,
   realpathSync,
+  writeFileSync,
 } = await import("node:fs");
 const { basename, isAbsolute, relative, resolve, sep } = await import("node:path");
+const { spawnSync } = await import("node:child_process");
 
 export const CRG_ENVIRONMENT_MANIFEST_SCHEMA = "codexlooper.crg-environment.v1";
 export const CRG_LEGACY_REPOSITORY_PATHS = Object.freeze([
@@ -566,4 +575,156 @@ export function createCrgMacosSandboxLaunch({
     profile: sandboxProfile.profile,
     profile_sha256: profileSha256,
   });
+}
+
+function boundedExecutionLimit(value, fallback, label) {
+  const limit = value ?? fallback;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 3_600_000) {
+    foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", `${label} must be a bounded positive integer`);
+  }
+  return limit;
+}
+
+function operationTimeout(operation) {
+  if (operation === "version") return CRG_EXECUTION_LIMITS.version_timeout_ms;
+  if (operation === "build") return CRG_EXECUTION_LIMITS.build_timeout_ms;
+  if (operation === "detect-changes") return CRG_EXECUTION_LIMITS.detect_changes_timeout_ms;
+  foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG operation is not allowlisted");
+}
+
+function validateStandaloneLaunch(launch) {
+  if (
+    !launch ||
+    typeof launch !== "object" ||
+    typeof launch.executable !== "string" ||
+    !isAbsolute(launch.executable) ||
+    launch.executable.includes("\0") ||
+    !Array.isArray(launch.args) ||
+    launch.args.some((argument) => typeof argument !== "string" || argument.includes("\0")) ||
+    launch.shell !== false ||
+    !launch.env ||
+    typeof launch.env !== "object" ||
+    Array.isArray(launch.env)
+  ) {
+    foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG standalone launch must use the verified shell-free contract");
+  }
+  return launch;
+}
+
+function executionBytes(value) {
+  if (Buffer.isBuffer(value)) return value;
+  if (typeof value === "string") return Buffer.from(value, "utf8");
+  return Buffer.alloc(0);
+}
+
+function failedExecution(errorClass, duration, { reportPath = null, truncated = false } = {}) {
+  return createCrgResult({
+    status: "failed",
+    duration_ms: duration,
+    report_path: reportPath,
+    truncated,
+    error_class: errorClass,
+  });
+}
+
+function writePrivateCrgReport({ projectRoot, runDir, operation, stdout, stderr, outcome, maxBytes }) {
+  const report = assertBelow(runDir, resolve(runDir, "crg-report.json"), "CRG report path");
+  const reportPath = relative(projectRoot, report).split(sep).join("/");
+  validateReportPath(reportPath);
+  const payload = Buffer.from(JSON.stringify({
+    operation,
+    stdout: redactCrgDiagnostic(stdout),
+    stderr: redactCrgDiagnostic(stderr),
+    outcome,
+  }), "utf8");
+  if (payload.length > maxBytes) return { report_path: null, truncated: true };
+  try {
+    writeFileSync(report, payload, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  } catch {
+    return null;
+  }
+  return { report_path: reportPath, truncated: false };
+}
+
+export function executeCrgStandalone({
+  launch,
+  operation,
+  projectRoot,
+  runDir,
+  baseSha,
+  headSha,
+  timeoutMs,
+  maxOutputBytes,
+  maxReportBytes,
+  spawnSyncImpl = spawnSync,
+} = {}) {
+  const configuredLaunch = validateStandaloneLaunch(launch);
+  const paths = validateCrgPrivatePaths({ projectRoot, runDir });
+  const timeout = boundedExecutionLimit(timeoutMs, operationTimeout(operation), "CRG timeout");
+  const outputLimit = boundedExecutionLimit(maxOutputBytes, CRG_EXECUTION_LIMITS.output_bytes, "CRG output limit");
+  const reportLimit = boundedExecutionLimit(maxReportBytes, CRG_EXECUTION_LIMITS.report_bytes, "CRG report limit");
+  if (typeof spawnSyncImpl !== "function") {
+    foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG process executor must be a function");
+  }
+  const started = Date.now();
+  let execution;
+  try {
+    execution = spawnSyncImpl(configuredLaunch.executable, configuredLaunch.args, {
+      cwd: paths.project_root,
+      env: configuredLaunch.env,
+      shell: false,
+      encoding: "buffer",
+      timeout,
+      maxBuffer: outputLimit,
+      windowsHide: true,
+    });
+  } catch {
+    return failedExecution("internal_error", Math.max(0, Date.now() - started));
+  }
+  const duration = Math.max(0, Date.now() - started);
+  if (!execution || typeof execution !== "object") return failedExecution("internal_error", duration);
+  const stdoutBytes = executionBytes(execution.stdout);
+  const stderrBytes = executionBytes(execution.stderr);
+  const stdout = stdoutBytes.toString("utf8");
+  const stderr = stderrBytes.toString("utf8");
+  const timedOut = execution.error?.code === "ETIMEDOUT" || execution.signal === "SIGTERM" || execution.signal === "SIGKILL";
+  const outputLimited = execution.error?.code === "ENOBUFS" || stdoutBytes.length > outputLimit || stderrBytes.length > outputLimit;
+  let outcome = "available";
+  if (timedOut) outcome = "timeout";
+  else if (outputLimited) outcome = "output_limit";
+  else if (execution.error || execution.status !== 0) outcome = "non_zero_exit";
+  const report = writePrivateCrgReport({
+    projectRoot: paths.project_root,
+    runDir: paths.run_dir,
+    operation,
+    stdout,
+    stderr,
+    outcome,
+    maxBytes: reportLimit,
+  });
+  if (report === null) return failedExecution("private_paths", duration, { truncated: outputLimited });
+  if (timedOut) return failedExecution("timeout", duration, { reportPath: report.report_path, truncated: report.truncated });
+  if (outputLimited || report.truncated) return failedExecution("output_limit", duration, { reportPath: report.report_path, truncated: true });
+  if (execution.error || execution.status !== 0) return failedExecution("non_zero_exit", duration, { reportPath: report.report_path });
+  if (operation === "version") {
+    if (stdout.trim() !== `code-review-graph ${CRG_VERSION}`) {
+      return failedExecution("version_mismatch", duration, { reportPath: report.report_path });
+    }
+    return createCrgResult({ status: "available", version: CRG_VERSION, duration_ms: duration, report_path: report.report_path });
+  }
+  if (operation === "build") {
+    return createCrgResult({ status: "available", version: CRG_VERSION, duration_ms: duration, report_path: report.report_path });
+  }
+  try {
+    return createCrgResult({
+      status: "available",
+      version: CRG_VERSION,
+      duration_ms: duration,
+      report_path: report.report_path,
+      advisory: normalizeDetectOutput(stdout, { baseSha, headSha }),
+    });
+  } catch (error) {
+    const errorClass = error?.code === "CODEXLOOPER_CRG_PROJECTION_INVALID" ? "projection_invalid" : "malformed_json";
+    return failedExecution(errorClass, duration, { reportPath: report.report_path });
+  }
 }
