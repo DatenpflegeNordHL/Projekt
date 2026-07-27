@@ -26,7 +26,7 @@ import { parseRunPolicy } from "./run-policy.mjs";
 import { assertManifestExternalTool, verifyRuntimeManifest } from "./runtime-integrity.mjs";
 import { aggregateUsage, readUsageEvents } from "./telemetry.mjs";
 import { disabledCrgResult } from "./code-review-graph.mjs";
-import { deriveCrgSandboxIdentity, optionalCrgRuntimeConfig } from "./crg-runtime-config.mjs";
+import { deriveCrgSandboxIdentity, optionalCrgRuntimeConfig, verifyCrgSandboxIdentity } from "./crg-runtime-config.mjs";
 
 const MAX_PLAN_BYTES = 2_000_000;
 const SAFE_ENV_KEYS = [
@@ -567,7 +567,6 @@ export async function runProject({
   });
   const started = now();
   const crgConfig = optionalCrgRuntimeConfig(env);
-  const crgIdentity = deriveCrgSandboxIdentity({ configured: crgConfig, projectRoot, runDirectory, runStartSha: headBefore });
   const crgReason = crgConfig.status === "unconfigured" ? "unconfigured" : budgets.max_crg_builds === 0 ? "budget_zero" : "policy_denied";
   const receipt = {
     schema: "codexlooper.run.v2",
@@ -609,7 +608,7 @@ export async function runProject({
       reason: crgReason,
       builds: budget.state.crg_builds,
       max_builds: budgets.max_crg_builds,
-      identity: crgIdentity,
+      identity: null,
       result: disabledCrgResult(),
     },
     policy: {
@@ -679,6 +678,25 @@ export async function runProject({
     });
     receipt.checks.branch_locked = postPreflight.branch === branch;
     receipt.checks.ancestry_monotonic = postPreflight.ancestry_ok;
+    const trustedCrgAuthority = readGitAuthority(projectRoot, env);
+    if (trustedCrgAuthority.branch !== branch || trustedCrgAuthority.head !== postPreflight.head) {
+      fail("CODEXLOOPER_CRG_TRUSTED_HEAD_CHANGED", "Trusted Git state changed across CRG verification boundary");
+    }
+    const crgIdentity = deriveCrgSandboxIdentity({
+      configured: crgConfig,
+      projectRoot,
+      runDirectory,
+      runStartSha: headBefore,
+      currentTrustedHead: trustedCrgAuthority.head,
+    });
+    receipt.crg.identity = verifyCrgSandboxIdentity({
+      expected: crgIdentity,
+      configured: optionalCrgRuntimeConfig(env),
+      projectRoot,
+      runDirectory,
+      runStartSha: headBefore,
+      currentTrustedHead: trustedCrgAuthority.head,
+    });
     const postPreflightStatus = gitStatus(projectRoot, "Post-preflight Git status check", env);
     receipt.checks.clean_after_preflight = postPreflightStatus.length === 0;
     if (!receipt.checks.clean_after_preflight) {

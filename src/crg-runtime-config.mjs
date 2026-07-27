@@ -86,9 +86,15 @@ export function optionalCrgRuntimeConfig(sourceEnv = process.env) {
   return Object.freeze({ status: "configured", ...readCrgRuntimeConfig({ configPath, expectedSha256: configSha256 }) });
 }
 
-export function deriveCrgSandboxIdentity({ configured, projectRoot, runDirectory, runStartSha } = {}) {
+function sha(value, label) {
+  if (typeof value !== "string" || !/^[a-f0-9]{40}$/u.test(value)) fail(`${label} is invalid`);
+  return value;
+}
+
+export function deriveCrgSandboxIdentity({ configured, projectRoot, runDirectory, runStartSha, currentTrustedHead } = {}) {
   if (configured?.status !== "configured") return null;
-  if (typeof runStartSha !== "string" || !/^[a-f0-9]{40}$/u.test(runStartSha)) fail("Trusted CRG run-start SHA is invalid");
+  const runStart = sha(runStartSha, "Trusted CRG run-start SHA");
+  const currentHead = sha(currentTrustedHead, "Trusted CRG current HEAD");
   const launch = createCrgMacosSandboxLaunch({
     projectRoot: resolve(projectRoot),
     runDir: resolve(runDirectory),
@@ -97,7 +103,22 @@ export function deriveCrgSandboxIdentity({ configured, projectRoot, runDirectory
     commandPath: configured.config.environment.command.path,
     sandboxCommand: configured.config.sandbox.path,
     operation: "build",
-    baseSha: runStartSha,
+    baseSha: runStart,
   });
-  return Object.freeze({ config_sha256: configured.sha256, environment_sha256: digest(JSON.stringify(configured.config.environment)), sandbox_sha256: configured.config.sandbox.sha256, profile_sha256: launch.profile_sha256, run_start_sha: runStartSha });
+  const identity = {
+    config_sha256: configured.sha256,
+    environment_sha256: digest(JSON.stringify(configured.config.environment)),
+    sandbox_sha256: configured.config.sandbox.sha256,
+    profile_sha256: launch.profile_sha256,
+    run_start_sha: runStart,
+    current_trusted_head: currentHead,
+  };
+  return Object.freeze({ ...identity, launch_sha256: digest(JSON.stringify({ executable: launch.executable, args: launch.args, profile_sha256: launch.profile_sha256, run_start_sha: runStart, current_trusted_head: currentHead })) });
+}
+
+export function verifyCrgSandboxIdentity({ expected, configured, projectRoot, runDirectory, runStartSha, currentTrustedHead } = {}) {
+  if (!expected || typeof expected !== "object") fail("Expected CRG sandbox identity is invalid");
+  const actual = deriveCrgSandboxIdentity({ configured, projectRoot, runDirectory, runStartSha, currentTrustedHead });
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) fail("CRG sandbox identity does not match");
+  return actual;
 }

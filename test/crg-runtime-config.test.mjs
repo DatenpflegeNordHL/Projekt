@@ -9,6 +9,7 @@ import {
   deriveCrgSandboxIdentity,
   optionalCrgRuntimeConfig,
   serializeCrgRuntimeConfig,
+  verifyCrgSandboxIdentity,
 } from "../src/crg-runtime-config.mjs";
 
 function executable(path) {
@@ -39,8 +40,11 @@ test("sealed CRG config validates, produces only digests, and derives without ex
     assert.equal(configured.status, "configured");
     const runDirectory = join(fixture.root, "run");
     mkdirSync(runDirectory, { recursive: true, mode: 0o700 });
-    const identity = deriveCrgSandboxIdentity({ configured, projectRoot: fixture.root, runDirectory, runStartSha: "a".repeat(40) });
-    assert.deepEqual(Object.keys(identity).sort(), ["config_sha256", "environment_sha256", "profile_sha256", "run_start_sha", "sandbox_sha256"]);
+    const identity = deriveCrgSandboxIdentity({ configured, projectRoot: fixture.root, runDirectory, runStartSha: "a".repeat(40), currentTrustedHead: "b".repeat(40) });
+    assert.deepEqual(Object.keys(identity).sort(), ["config_sha256", "current_trusted_head", "environment_sha256", "launch_sha256", "profile_sha256", "run_start_sha", "sandbox_sha256"]);
+    assert.deepEqual(verifyCrgSandboxIdentity({ expected: identity, configured, projectRoot: fixture.root, runDirectory, runStartSha: "a".repeat(40), currentTrustedHead: "b".repeat(40) }), identity);
+    assert.throws(() => verifyCrgSandboxIdentity({ expected: identity, configured, projectRoot: fixture.root, runDirectory, runStartSha: "a".repeat(40), currentTrustedHead: "c".repeat(40) }), /identity does not match/);
+    assert.throws(() => verifyCrgSandboxIdentity({ expected: { ...identity, profile_sha256: "0".repeat(64) }, configured, projectRoot: fixture.root, runDirectory, runStartSha: "a".repeat(40), currentTrustedHead: "b".repeat(40) }), /identity does not match/);
     assert.equal(optionalCrgRuntimeConfig({}).status, "unconfigured");
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });

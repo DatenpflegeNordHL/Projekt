@@ -549,6 +549,33 @@ test("generated runner preserves branch, enforces budgets and archives plan thro
   }
 });
 
+test("configured runner records only sealed CRG identity and does not execute CRG", () => {
+  const fixture = createFixture();
+  try {
+    const result = installFixture(fixture, createCrgFixture(fixture));
+    const run = spawnSync(result.runCommand, ["docs/plans/fixture.md"], {
+      cwd: fixture.project,
+      encoding: "utf8",
+      env: modelEnv(),
+      timeout: 120_000,
+    });
+    assert.equal(run.status, 0, run.stderr);
+    const receipt = JSON.parse(readFileSync(join(onlyRunDirectory(fixture.project), "receipt.json"), "utf8"));
+    assert.equal(receipt.crg.status, "configured");
+    assert.equal(receipt.crg.reason, "budget_zero");
+    assert.equal(receipt.crg.builds, 0);
+    assert.equal(receipt.crg.max_builds, 0);
+    assert.match(receipt.crg.identity.run_start_sha, /^[a-f0-9]{40}$/);
+    assert.match(receipt.crg.identity.current_trusted_head, /^[a-f0-9]{40}$/);
+    assert.match(receipt.crg.identity.config_sha256, /^[a-f0-9]{64}$/);
+    assert.match(receipt.crg.identity.profile_sha256, /^[a-f0-9]{64}$/);
+    assert.match(receipt.crg.identity.launch_sha256, /^[a-f0-9]{64}$/);
+    assert.doesNotMatch(JSON.stringify(receipt), /crg-runtime-config\.json|crg-environment|sandbox-exec|closerouter_test_secret|crg-report/);
+  } finally {
+    removeTree(fixture.root);
+  }
+});
+
 test("generated runner exposes only a private selected-task plan to Ralphex", () => {
   const fixture = createFixture(
     "0.130.0",
