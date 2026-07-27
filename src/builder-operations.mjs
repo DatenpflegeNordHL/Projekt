@@ -21,6 +21,7 @@ const REPLACE_EXACT_FIELDS = Object.freeze([
   "type",
 ]);
 const SHA256 = /^[0-9a-f]{64}$/u;
+const MAX_OPERATION_TYPE_CODE_UNITS = "replace_exact".length;
 const PATH_CONTROL = /[\u0000-\u001f\u007f]/u;
 const PROTOTYPE_SENSITIVE_COMPONENTS = new Set([
   "__defineGetter__",
@@ -39,6 +40,26 @@ const PROTOTYPE_SENSITIVE_COMPONENTS = new Set([
 ]);
 const ENVELOPE_PREFIX_BYTES = Buffer.byteLength('{"version":2,"operations":[', "utf8");
 const ENVELOPE_SUFFIX_BYTES = Buffer.byteLength("]}", "utf8");
+const CREATE_FILE_EMPTY_BYTES = Buffer.byteLength(
+  JSON.stringify({
+    type: "create_file",
+    path: "",
+    content: "",
+    expected_absent: true,
+  }),
+  "utf8",
+);
+const REPLACE_EXACT_EMPTY_BYTES = Buffer.byteLength(
+  JSON.stringify({
+    type: "replace_exact",
+    path: "",
+    expected_file_sha256: "0".repeat(64),
+    old_text: "",
+    new_text: "",
+    expected_occurrences: 1,
+  }),
+  "utf8",
+);
 
 function fail(code, message) {
   const error = new Error(message);
@@ -48,6 +69,30 @@ function fail(code, message) {
 
 function byteLength(value) {
   return Buffer.byteLength(value, "utf8");
+}
+
+function isWellFormedUnicode(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function requireStringWithinLowerBound(value, maximumBytes, label, code) {
+  if (typeof value !== "string") {
+    fail(code, `${label} must be text`);
+  }
+  if (value.length > maximumBytes) {
+    fail(code, `${label} exceeds its byte limit`);
+  }
+  return value;
 }
 
 function isPlainObject(value) {
@@ -163,14 +208,20 @@ function safePath(
   label,
   code = "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
 ) {
+  const path = requireStringWithinLowerBound(
+    value,
+    BUILDER_OPERATION_LIMITS.max_path_bytes,
+    label,
+    code,
+  );
   if (
-    typeof value !== "string" ||
-    !value ||
-    byteLength(value) > BUILDER_OPERATION_LIMITS.max_path_bytes ||
-    PATH_CONTROL.test(value) ||
-    value.includes("\\") ||
-    value.startsWith("/") ||
-    value
+    !path ||
+    !isWellFormedUnicode(path) ||
+    path.includes("\0") ||
+    PATH_CONTROL.test(path) ||
+    path.includes("\\") ||
+    path.startsWith("/") ||
+    path
       .split("/")
       .some(
         (component) =>
@@ -185,31 +236,50 @@ function safePath(
       `${label} must be a safe project-relative POSIX path`,
     );
   }
-  return value;
+  if (byteLength(path) > BUILDER_OPERATION_LIMITS.max_path_bytes) {
+    fail(code, `${label} exceeds its byte limit`);
+  }
+  return path;
 }
 
 function boundedContent(value, label, { nonEmpty = false } = {}) {
+  const content = requireStringWithinLowerBound(
+    value,
+    BUILDER_OPERATION_LIMITS.max_content_bytes,
+    label,
+    "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+  );
   if (
-    typeof value !== "string" ||
-    (nonEmpty && value.length === 0) ||
-    value.includes("\0") ||
-    byteLength(value) > BUILDER_OPERATION_LIMITS.max_content_bytes
+    (nonEmpty && content.length === 0) ||
+    !isWellFormedUnicode(content) ||
+    content.includes("\0")
   ) {
     fail(
       "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
       `${label} must be bounded${nonEmpty ? " non-empty" : ""} text`,
     );
   }
-  return value;
+  if (byteLength(content) > BUILDER_OPERATION_LIMITS.max_content_bytes) {
+    fail(
+      "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+      `${label} exceeds its byte limit`,
+    );
+  }
+  return content;
 }
 
-function validateOperation(value, index) {
+function validateOperation(value, index, maximumEncodedBytes) {
   const label = `Builder operation ${index}`;
   const snapshot = snapshotDataObject(value, label);
-  if (typeof snapshot.fields.type !== "string") {
+  const type = requireStringWithinLowerBound(
+    snapshot.fields.type,
+    MAX_OPERATION_TYPE_CODE_UNITS,
+    `${label} type`,
+    "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+  );
+  if (!isWellFormedUnicode(type) || type.includes("\0")) {
     fail("CODEXLOOPER_BUILDER_OPERATIONS_INVALID", `${label} has an invalid type`);
   }
-  const type = snapshot.fields.type;
 
   if (type === "create_file") {
     const fields = assertExactSnapshot(snapshot, CREATE_FILE_FIELDS, label);
@@ -219,19 +289,48 @@ function validateOperation(value, index) {
         `${label} create_file expected_absent must be true`,
       );
     }
+    const pathValue = requireStringWithinLowerBound(
+      fields.path,
+      BUILDER_OPERATION_LIMITS.max_path_bytes,
+      `${label} path`,
+      "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+    );
+    const contentValue = requireStringWithinLowerBound(
+      fields.content,
+      BUILDER_OPERATION_LIMITS.max_content_bytes,
+      `${label} content`,
+      "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+    );
+    if (
+      CREATE_FILE_EMPTY_BYTES + pathValue.length + contentValue.length >
+      maximumEncodedBytes
+    ) {
+      fail(
+        "CODEXLOOPER_BUILDER_OPERATIONS_TOO_LARGE",
+        "Builder operation envelope exceeds its encoded byte limit",
+      );
+    }
     return Object.freeze({
       type: "create_file",
-      path: safePath(fields.path, `${label} path`),
-      content: boundedContent(fields.content, `${label} content`),
+      path: safePath(pathValue, `${label} path`),
+      content: boundedContent(contentValue, `${label} content`),
       expected_absent: true,
     });
   }
 
   if (type === "replace_exact") {
     const fields = assertExactSnapshot(snapshot, REPLACE_EXACT_FIELDS, label);
+    const expectedFileSha256 = requireStringWithinLowerBound(
+      fields.expected_file_sha256,
+      64,
+      `${label} expected_file_sha256`,
+      "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+    );
     if (
-      typeof fields.expected_file_sha256 !== "string" ||
-      !SHA256.test(fields.expected_file_sha256)
+      expectedFileSha256.length !== 64 ||
+      !isWellFormedUnicode(expectedFileSha256) ||
+      expectedFileSha256.includes("\0") ||
+      !SHA256.test(expectedFileSha256)
     ) {
       fail(
         "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
@@ -244,8 +343,38 @@ function validateOperation(value, index) {
         `${label} expected_occurrences must be exactly 1`,
       );
     }
-    const oldText = boundedContent(fields.old_text, `${label} old_text`, { nonEmpty: true });
-    const newText = boundedContent(fields.new_text, `${label} new_text`);
+    const pathValue = requireStringWithinLowerBound(
+      fields.path,
+      BUILDER_OPERATION_LIMITS.max_path_bytes,
+      `${label} path`,
+      "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+    );
+    const oldTextValue = requireStringWithinLowerBound(
+      fields.old_text,
+      BUILDER_OPERATION_LIMITS.max_content_bytes,
+      `${label} old_text`,
+      "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+    );
+    const newTextValue = requireStringWithinLowerBound(
+      fields.new_text,
+      BUILDER_OPERATION_LIMITS.max_content_bytes,
+      `${label} new_text`,
+      "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+    );
+    if (
+      REPLACE_EXACT_EMPTY_BYTES +
+        pathValue.length +
+        oldTextValue.length +
+        newTextValue.length >
+      maximumEncodedBytes
+    ) {
+      fail(
+        "CODEXLOOPER_BUILDER_OPERATIONS_TOO_LARGE",
+        "Builder operation envelope exceeds its encoded byte limit",
+      );
+    }
+    const oldText = boundedContent(oldTextValue, `${label} old_text`, { nonEmpty: true });
+    const newText = boundedContent(newTextValue, `${label} new_text`);
     if (oldText === newText) {
       fail(
         "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
@@ -254,8 +383,8 @@ function validateOperation(value, index) {
     }
     return Object.freeze({
       type: "replace_exact",
-      path: safePath(fields.path, `${label} path`),
-      expected_file_sha256: fields.expected_file_sha256,
+      path: safePath(pathValue, `${label} path`),
+      expected_file_sha256: expectedFileSha256,
       old_text: oldText,
       new_text: newText,
       expected_occurrences: 1,
@@ -288,7 +417,14 @@ export function validateBuilderOperationEnvelope(value) {
   const seen = new Set();
   let envelopeBytes = ENVELOPE_PREFIX_BYTES + ENVELOPE_SUFFIX_BYTES;
   for (let index = 0; index < operationValues.length; index += 1) {
-    const operation = validateOperation(operationValues[index], index);
+    const separatorBytes = index === 0 ? 0 : 1;
+    const maximumEncodedBytes =
+      BUILDER_OPERATION_LIMITS.max_envelope_bytes - envelopeBytes - separatorBytes;
+    const operation = validateOperation(
+      operationValues[index],
+      index,
+      maximumEncodedBytes,
+    );
     if (seen.has(operation.path)) {
       fail(
         "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
@@ -296,7 +432,7 @@ export function validateBuilderOperationEnvelope(value) {
       );
     }
     seen.add(operation.path);
-    envelopeBytes += (index === 0 ? 0 : 1) + byteLength(JSON.stringify(operation));
+    envelopeBytes += separatorBytes + byteLength(JSON.stringify(operation));
     if (envelopeBytes > BUILDER_OPERATION_LIMITS.max_envelope_bytes) {
       fail(
         "CODEXLOOPER_BUILDER_OPERATIONS_TOO_LARGE",
@@ -348,13 +484,18 @@ function validateBaselineFiles(value) {
         `Builder operation baseline files must be enumerable own data properties: ${path}`,
       );
     }
-    const content = descriptor.value;
+    const content = requireStringWithinLowerBound(
+      descriptor.value,
+      BUILDER_OPERATION_LIMITS.max_baseline_bytes - totalBytes,
+      `Builder operation baseline file ${path}`,
+      "CODEXLOOPER_BUILDER_BASELINE_INVALID",
+    );
     safePath(
       path,
       "Builder operation baseline path",
       "CODEXLOOPER_BUILDER_BASELINE_INVALID",
     );
-    if (typeof content !== "string" || content.includes("\0")) {
+    if (!isWellFormedUnicode(content) || content.includes("\0")) {
       fail(
         "CODEXLOOPER_BUILDER_BASELINE_INVALID",
         `Builder operation baseline file must contain text: ${path}`,

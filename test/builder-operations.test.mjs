@@ -302,6 +302,96 @@ test("rejects unsafe project-relative POSIX paths", () => {
   }
 });
 
+test("rejects lone surrogates in operation and baseline paths or text", () => {
+  const original = "export const value = 1;\n";
+  for (const surrogate of ["\ud800", "\udfff"]) {
+    assert.throws(
+      () => validateBuilderOperationEnvelope(envelope(create(`src/${surrogate}.mjs`))),
+      (error) => error.code === "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+    );
+    assert.throws(
+      () =>
+        validateBuilderOperationEnvelope(
+          envelope(create("src/value.mjs", `invalid ${surrogate} content`)),
+        ),
+      (error) => error.code === "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+    );
+    assert.throws(
+      () =>
+        validateBuilderOperationEnvelope(
+          envelope(replace(original, { old_text: `value ${surrogate}` })),
+        ),
+      (error) => error.code === "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+    );
+    assert.throws(
+      () =>
+        validateBuilderOperationEnvelope(
+          envelope(replace(original, { new_text: `value ${surrogate}` })),
+        ),
+      (error) => error.code === "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+    );
+    assert.throws(
+      () =>
+        materializeBuilderOperations(
+          { [`src/${surrogate}.mjs`]: "" },
+          envelope(create("src/created.mjs")),
+        ),
+      (error) => error.code === "CODEXLOOPER_BUILDER_BASELINE_INVALID",
+    );
+    assert.throws(
+      () =>
+        materializeBuilderOperations(
+          { "src/value.mjs": `invalid ${surrogate} content` },
+          envelope(create("src/created.mjs")),
+        ),
+      (error) => error.code === "CODEXLOOPER_BUILDER_BASELINE_INVALID",
+    );
+  }
+});
+
+test("rejects the unpaired-surrogate and replacement-character path collision", () => {
+  const loneSurrogatePath = "src/\ud800.mjs";
+  const replacementCharacterPath = "src/\ufffd.mjs";
+  assert.equal(
+    Buffer.from(loneSurrogatePath, "utf8").equals(
+      Buffer.from(replacementCharacterPath, "utf8"),
+    ),
+    true,
+  );
+  assert.throws(
+    () =>
+      validateBuilderOperationEnvelope(
+        envelope(create(loneSurrogatePath), create(replacementCharacterPath)),
+      ),
+    (error) => error.code === "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+  );
+  assert.equal(
+    validateBuilderOperationEnvelope(envelope(create(replacementCharacterPath)))
+      .operations[0].path,
+    replacementCharacterPath,
+  );
+});
+
+test("accepts valid astral Unicode in paths, operation text and baselines", () => {
+  const original = "export const value = \"😀\";\n";
+  const result = materializeBuilderOperations(
+    { "src/😀.mjs": original },
+    envelope(
+      replace(original, {
+        path: "src/😀.mjs",
+        old_text: "\"😀\"",
+        new_text: "\"🚀\"",
+      }),
+      create("src/🚀.mjs", "export const launched = \"🚀\";\n"),
+    ),
+  );
+  assert.deepEqual([...result.files], [
+    ["src/😀.mjs", "export const value = \"🚀\";\n"],
+    ["src/🚀.mjs", "export const launched = \"🚀\";\n"],
+  ]);
+  assert.deepEqual(result.changed_paths, ["src/😀.mjs", "src/🚀.mjs"]);
+});
+
 test("rejects duplicate operation target paths", () => {
   assert.throws(
     () =>
@@ -422,7 +512,9 @@ test("rejects malformed versions, arrays, operation values, hashes and precondit
     envelope(null),
     { version: 2, operations: new Array(1) },
     envelope({ ...create(), expected_absent: false }),
+    envelope({ ...create(), type: "\ud800" }),
     envelope(replace(original, { expected_file_sha256: 42 })),
+    envelope(replace(original, { expected_file_sha256: `${"a".repeat(63)}\ud800` })),
     envelope(replace(original, { expected_file_sha256: "A".repeat(64) })),
     envelope(replace(original, { expected_file_sha256: "a".repeat(63) })),
     envelope(replace(original, { expected_occurrences: 2 })),
@@ -524,6 +616,14 @@ test("accepts exact aggregate boundaries and rejects one-byte multibyte overflow
     () => validateBuilderOperationEnvelope(overEnvelope),
     (error) => error.code === "CODEXLOOPER_BUILDER_OPERATIONS_TOO_LARGE",
   );
+  const illFormedOverEnvelope = envelope(
+    create("a", "a".repeat(firstBytes)),
+    create("b", `${"b".repeat(secondBytes)}\ud800`),
+  );
+  assert.throws(
+    () => validateBuilderOperationEnvelope(illFormedOverEnvelope),
+    (error) => error.code === "CODEXLOOPER_BUILDER_OPERATIONS_TOO_LARGE",
+  );
 
   const exactPath = `p/${"é".repeat((BUILDER_OPERATION_LIMITS.max_path_bytes - 2) / 2)}`;
   assert.equal(
@@ -555,6 +655,74 @@ test("accepts exact aggregate boundaries and rejects one-byte multibyte overflow
         envelope(create("src/over.mjs", `${exactContent}é`)),
       ),
     (error) => error.code === "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+  );
+
+  const exactAstralPath = `p/${"😀".repeat(255)}aa`;
+  assert.equal(
+    Buffer.byteLength(exactAstralPath, "utf8"),
+    BUILDER_OPERATION_LIMITS.max_path_bytes,
+  );
+  assert.equal(
+    validateBuilderOperationEnvelope(envelope(create(exactAstralPath))).operations[0]
+      .path,
+    exactAstralPath,
+  );
+  assert.throws(
+    () => validateBuilderOperationEnvelope(envelope(create(`${exactAstralPath}a`))),
+    (error) => error.code === "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+  );
+
+  const exactAstralContent = "😀".repeat(
+    BUILDER_OPERATION_LIMITS.max_content_bytes / 4,
+  );
+  assert.equal(
+    Buffer.byteLength(exactAstralContent, "utf8"),
+    BUILDER_OPERATION_LIMITS.max_content_bytes,
+  );
+  assert.equal(
+    validateBuilderOperationEnvelope(
+      envelope(create("src/exact-astral.mjs", exactAstralContent)),
+    ).operations[0].content,
+    exactAstralContent,
+  );
+});
+
+test("cheap code-unit limits reject oversized ill-formed strings first", () => {
+  const oversizedContent = `${"x".repeat(
+    BUILDER_OPERATION_LIMITS.max_content_bytes,
+  )}\ud800`;
+  assert.throws(
+    () =>
+      validateBuilderOperationEnvelope(
+        envelope(create("src/oversized.mjs", oversizedContent)),
+      ),
+    (error) =>
+      error.code === "CODEXLOOPER_BUILDER_OPERATIONS_INVALID" &&
+      /byte limit/u.test(error.message),
+  );
+
+  const oversizedPath = `${"x".repeat(
+    BUILDER_OPERATION_LIMITS.max_path_bytes,
+  )}\ud800`;
+  assert.throws(
+    () => validateBuilderOperationEnvelope(envelope(create(oversizedPath))),
+    (error) =>
+      error.code === "CODEXLOOPER_BUILDER_OPERATIONS_INVALID" &&
+      /byte limit/u.test(error.message),
+  );
+
+  const oversizedBaseline = `${"x".repeat(
+    BUILDER_OPERATION_LIMITS.max_baseline_bytes,
+  )}\ud800`;
+  assert.throws(
+    () =>
+      materializeBuilderOperations(
+        { "src/value.mjs": oversizedBaseline },
+        envelope(create("src/created.mjs")),
+      ),
+    (error) =>
+      error.code === "CODEXLOOPER_BUILDER_BASELINE_INVALID" &&
+      /byte limit/u.test(error.message),
   );
 });
 
