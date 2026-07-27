@@ -244,3 +244,222 @@ export function redactCrgDiagnostic(value, secret = "", limit = 4_000) {
     .replace(/(?:api[_-]?key|token|password)\s*[:=]\s*[^\s,;]+/giu, "[REDACTED]");
   return text.slice(-limit);
 }
+
+const { createHash } = await import("node:crypto");
+const {
+  accessSync,
+  constants,
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+} = await import("node:fs");
+const { basename, isAbsolute, relative, resolve, sep } = await import("node:path");
+
+export const CRG_ENVIRONMENT_MANIFEST_SCHEMA = "codexlooper.crg-environment.v1";
+export const CRG_LEGACY_REPOSITORY_PATHS = Object.freeze([
+  ".code-review-graph.db",
+  ".code-review-graph.db-wal",
+  ".code-review-graph.db-shm",
+  ".code-review-graph.db-journal",
+]);
+
+const PYTHON_LAUNCHER = /^python(?:3(?:\.\d+)?)?$/u;
+
+function foundationFail(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  throw error;
+}
+
+function foundationSha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function canonicalDirectory(path, label) {
+  if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0")) {
+    foundationFail("CODEXLOOPER_CRG_PRIVATE_PATH_INVALID", `${label} must be an absolute path`);
+  }
+  let stat;
+  let canonical;
+  try {
+    stat = lstatSync(path);
+    canonical = realpathSync(path);
+  } catch {
+    foundationFail("CODEXLOOPER_CRG_PRIVATE_PATH_INVALID", `${label} does not exist: ${path}`);
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    foundationFail("CODEXLOOPER_CRG_PRIVATE_PATH_INVALID", `${label} must be a non-symlink directory: ${path}`);
+  }
+  return canonical;
+}
+
+function canonicalRegularFile(path, label, code = "CODEXLOOPER_CRG_ENVIRONMENT_INTEGRITY") {
+  if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0")) {
+    foundationFail(code, `${label} must be an absolute path`);
+  }
+  let stat;
+  let canonical;
+  try {
+    stat = lstatSync(path);
+    canonical = realpathSync(path);
+    accessSync(canonical, constants.X_OK);
+  } catch {
+    foundationFail(code, `${label} must be an executable regular file: ${path}`);
+  }
+  if (stat.isSymbolicLink() || !stat.isFile() || canonical !== path) {
+    foundationFail(code, `${label} must be a canonical non-symlink regular file: ${path}`);
+  }
+  return {
+    path: canonical,
+    mode: stat.mode & 0o777,
+    size: stat.size,
+    sha256: foundationSha256(readFileSync(canonical)),
+  };
+}
+
+function relativeInside(root, path) {
+  const value = relative(root, path);
+  return Boolean(value) && !value.startsWith(`..${sep}`) && value !== ".." && !isAbsolute(value);
+}
+
+function assertBelow(root, path, label) {
+  if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0") || !relativeInside(root, resolve(path))) {
+    foundationFail("CODEXLOOPER_CRG_PRIVATE_PATH_INVALID", `${label} must stay below the private run directory`);
+  }
+  if (existsSync(path) && !relativeInside(root, realpathSync(path))) {
+    foundationFail("CODEXLOOPER_CRG_PRIVATE_PATH_INVALID", `${label} traverses a symlink outside the private run directory`);
+  }
+  return resolve(path);
+}
+
+function manifestEntryPath(root, path) {
+  return relative(root, path).split(sep).join("/");
+}
+
+function inspectEnvironmentEntries(root, interpreterPath) {
+  const entries = [];
+  const visit = (directory) => {
+    const names = readdirSync(directory).sort((left, right) => left.localeCompare(right));
+    for (const name of names) {
+      const path = resolve(directory, name);
+      const stat = lstatSync(path);
+      const entryPath = manifestEntryPath(root, path);
+      if (stat.isDirectory()) {
+        entries.push({ path: entryPath, type: "directory", mode: stat.mode & 0o777 });
+        visit(path);
+        continue;
+      }
+      if (stat.isFile()) {
+        entries.push({
+          path: entryPath,
+          type: "file",
+          mode: stat.mode & 0o777,
+          size: stat.size,
+          sha256: foundationSha256(readFileSync(path)),
+        });
+        continue;
+      }
+      if (!stat.isSymbolicLink()) {
+        foundationFail("CODEXLOOPER_CRG_ENVIRONMENT_INTEGRITY", `CRG environment contains an unsupported entry: ${entryPath}`);
+      }
+      let resolved;
+      try {
+        resolved = realpathSync(path);
+      } catch {
+        foundationFail("CODEXLOOPER_CRG_ENVIRONMENT_INTEGRITY", `CRG environment contains a dangling symlink: ${entryPath}`);
+      }
+      const targetInsideEnvironment = resolved === root || relativeInside(root, resolved);
+      if (!targetInsideEnvironment) {
+        const parent = manifestEntryPath(root, directory);
+        if (parent !== "bin" || !PYTHON_LAUNCHER.test(name) || resolved !== interpreterPath) {
+          foundationFail("CODEXLOOPER_CRG_ENVIRONMENT_INTEGRITY", `CRG environment has an unexpected external symlink: ${entryPath}`);
+        }
+      }
+      entries.push({
+        path: entryPath,
+        type: "symlink",
+        mode: stat.mode & 0o777,
+        link_target: readlinkSync(path),
+        resolved_target: resolved,
+        target_inside_environment: targetInsideEnvironment,
+      });
+    }
+  };
+  visit(root);
+  return entries;
+}
+
+export function captureCrgEnvironmentIdentity({ environmentRoot, interpreterPath, commandPath } = {}) {
+  const root = canonicalDirectory(environmentRoot, "CRG environment root");
+  const interpreter = canonicalRegularFile(interpreterPath, "CRG interpreter");
+  const command = canonicalRegularFile(commandPath, "CRG console command", "CODEXLOOPER_CRG_UNSAFE_COMMAND");
+  if (!relativeInside(root, command.path)) {
+    foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG console command must stay inside the sealed environment");
+  }
+  return Object.freeze({
+    schema: CRG_ENVIRONMENT_MANIFEST_SCHEMA,
+    environment_root: root,
+    entries: Object.freeze(inspectEnvironmentEntries(root, interpreter.path).map((entry) => Object.freeze(entry))),
+    interpreter: Object.freeze(interpreter),
+    command: Object.freeze(command),
+  });
+}
+
+export function verifyCrgEnvironmentIdentity({ environmentRoot, interpreterPath, commandPath, manifest } = {}) {
+  if (!manifest || typeof manifest !== "object" || manifest.schema !== CRG_ENVIRONMENT_MANIFEST_SCHEMA) {
+    foundationFail("CODEXLOOPER_CRG_ENVIRONMENT_INTEGRITY", "CRG environment manifest schema is invalid");
+  }
+  const actual = captureCrgEnvironmentIdentity({ environmentRoot, interpreterPath, commandPath });
+  if (JSON.stringify(actual) !== JSON.stringify(manifest)) {
+    foundationFail("CODEXLOOPER_CRG_ENVIRONMENT_INTEGRITY", "CRG environment does not match its sealed manifest");
+  }
+  return actual;
+}
+
+export function validateCrgPrivatePaths({ projectRoot, runDir, homeDir, dataDir } = {}) {
+  const project = canonicalDirectory(projectRoot, "Project root");
+  const run = canonicalDirectory(runDir, "CRG private run directory");
+  const home = assertBelow(run, homeDir ?? resolve(run, "crg-home"), "CRG home directory");
+  const data = assertBelow(run, dataDir ?? resolve(run, "crg-data"), "CRG data directory");
+  return Object.freeze({ project_root: project, run_dir: run, home_dir: home, data_dir: data });
+}
+
+export function createCrgChildEnvironment(options = {}) {
+  const paths = validateCrgPrivatePaths(options);
+  return Object.freeze({
+    HOME: paths.home_dir,
+    CRG_DATA_DIR: paths.data_dir,
+    CRG_REPO_ROOT: paths.project_root,
+    CRG_PARSE_EXECUTOR: "thread",
+    CRG_PARSE_WORKERS: "1",
+    PYTHONNOUSERSITE: "1",
+    PYTHONSAFEPATH: "1",
+    PYTHONDONTWRITEBYTECODE: "1",
+    DO_NOT_TRACK: "1",
+    NO_COLOR: "1",
+    PATH: "/usr/bin:/bin",
+  });
+}
+
+export function assertNoLegacyCrgRepositoryState(projectRoot) {
+  const root = canonicalDirectory(projectRoot, "Project root");
+  const present = CRG_LEGACY_REPOSITORY_PATHS.filter((name) => existsSync(resolve(root, name)));
+  if (present.length > 0) {
+    foundationFail("CODEXLOOPER_CRG_LEGACY_REPOSITORY_STATE", `Legacy CRG repository state is present: ${present.join(", ")}`);
+  }
+  return Object.freeze({ project_root: root, legacy_paths: Object.freeze([]) });
+}
+
+export function verifyLegacyCrgRepositoryState(snapshot, projectRoot = snapshot?.project_root) {
+  if (!snapshot || typeof snapshot !== "object" || !Array.isArray(snapshot.legacy_paths) || snapshot.legacy_paths.length !== 0) {
+    foundationFail("CODEXLOOPER_CRG_LEGACY_REPOSITORY_STATE", "Legacy CRG repository snapshot is invalid");
+  }
+  const actual = assertNoLegacyCrgRepositoryState(projectRoot);
+  if (actual.project_root !== snapshot.project_root) {
+    foundationFail("CODEXLOOPER_CRG_LEGACY_REPOSITORY_STATE", "Project root changed after CRG legacy-state capture");
+  }
+  return actual;
+}

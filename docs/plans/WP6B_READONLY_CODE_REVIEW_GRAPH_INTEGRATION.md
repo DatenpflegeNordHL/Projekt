@@ -400,7 +400,7 @@ definition and legacy repository-state guard with focused tests. Do not execute
 CRG commands, launch a sandbox, create reports, or integrate with bootstrap,
 runner or Sol in this task.
 
-- [ ] Task 2 complete.
+- [x] Task 2 complete.
 
 ### Task 3: Bounded standalone execution
 
