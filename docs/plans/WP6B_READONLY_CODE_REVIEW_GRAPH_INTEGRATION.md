@@ -402,16 +402,33 @@ runner or Sol in this task.
 
 - [x] Task 2 complete.
 
-### Task 3: Bounded standalone execution
+### Task 3: Sealed macOS sandbox and launch-contract foundation
 
-Build only on the Task 1 and Task 2 contracts to implement the verified macOS
-sandbox invocation, bounded CRG process execution, timeouts, output and report
-limits, private report storage, repository-mutation checks and all remaining
-adapter tests. Do not integrate with bootstrap, runner or Sol in this task.
+Build only on the Task 1 and Task 2 contracts to establish private execution
+paths, canonical executable and configuration validation, and static verified
+macOS sandbox launch construction with focused tests. Do not execute CRG, write
+reports, add runner plumbing, or add Sol in this task.
 
 - [ ] Task 3 complete.
 
-### Task 4: Original executable plumbing and receipts
+### Task 4: Bounded standalone CRG process execution and private reports
+
+Build only on Task 3 to execute the verified standalone CRG process with bounded
+timeouts, output and report limits, deterministic result handling and private
+report storage, with focused tests. Do not add host runner plumbing or Sol in
+this task.
+
+- [ ] Task 4 complete.
+
+### Task 5: Repository-mutation guards and standalone adapter verification
+
+Build only on Tasks 3 and 4 to add before-and-after repository-state checks and
+focused standalone adapter verification. Do not add host runner plumbing or Sol
+in this task.
+
+- [ ] Task 5 complete.
+
+### Task 6: Original executable plumbing and receipts
 
 Add optional CRG environment, manifest and sandbox identity support to bootstrap,
 install and preflight. Record and re-verify the complete sealed environment,
@@ -420,16 +437,16 @@ run-start SHA and current trusted HEAD. Add secret-free CRG metadata and budget
 state to receipts. Preserve disabled legacy behavior. Do not modify Sol integration
 in this task.
 
-- [ ] Task 4 complete.
+- [ ] Task 6 complete.
 
-### Task 5: Fail-open Sol advisory integration
+### Task 7: Fail-open Sol advisory integration
 
 Build or reuse the graph by exact cache key, run detect, create the strict bounded
 projection and append only that projection to the immutable Runtime A Sol review
 prompt. Preserve normal independent review for every valid CRG runtime failure.
 Update focused tests and documentation.
 
-- [ ] Task 5 complete.
+- [ ] Task 7 complete.
 
 ## Validation requirements
 
