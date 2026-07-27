@@ -28,7 +28,7 @@ import { assertManifestExternalTool, verifyRuntimeManifest } from "./runtime-int
 import { aggregateUsage, readUsageEvents } from "./telemetry.mjs";
 import { createCrgMacosSandboxLaunch, disabledCrgResult, executeCrgStandalone } from "./code-review-graph.mjs";
 import { createSolAdvisoryProjection } from "./sol-advisory.mjs";
-import { crgCacheKey, readCrgBuildCache, writeCrgBuildCache } from "./crg-cache.mjs";
+import { crgCacheDataDirectory, crgCacheKey, readCrgBuildCache, writeCrgBuildCache } from "./crg-cache.mjs";
 import { deriveCrgSandboxIdentity, optionalCrgRuntimeConfig, verifyCrgSandboxIdentity } from "./crg-runtime-config.mjs";
 
 const MAX_PLAN_BYTES = 2_000_000;
@@ -710,15 +710,19 @@ export async function runProject({
       {
         const cacheKey = crgCacheKey({ projectRoot, identity: receipt.crg.identity });
         const cachedBuild = readCrgBuildCache({ projectRoot, key: cacheKey });
+        const cacheDataDirectory = crgCacheDataDirectory({ projectRoot, key: cacheKey, create: !cachedBuild });
+        if (cachedBuild && !cacheDataDirectory) fail("CODEXLOOPER_CRG_CACHE_INTEGRITY", "CRG cache graph data is missing");
         const options = {
           projectRoot,
           runDir: runDirectory,
+          dataDir: cacheDataDirectory,
           baseSha: headBefore,
           headSha: trustedCrgAuthority.head,
         };
         const configured = crgConfig.config;
         const launchFor = (operation) => createCrgMacosSandboxLaunch({
           ...options,
+          dataDir: cacheDataDirectory,
           environmentRoot: configured.environment.environment_root,
           interpreterPath: configured.environment.interpreter.path,
           commandPath: configured.environment.command.path,

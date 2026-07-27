@@ -10,6 +10,11 @@ function directory(projectRoot) {
   if (existsSync(path)) { const stat = lstatSync(path); if (stat.isSymbolicLink() || !stat.isDirectory() || (stat.mode & 0o077) !== 0) fail("CRG cache directory is unsafe"); }
   return path;
 }
+function safeDirectory(path) {
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink() || !stat.isDirectory() || (stat.mode & 0o077) !== 0) fail("CRG cache data directory is unsafe");
+  return path;
+}
 
 export function crgCacheKey({ projectRoot, identity, policyVersion = "crg-v1" } = {}) {
   if (!isAbsolute(projectRoot) || !identity?.config_sha256 || !identity?.profile_sha256 || !identity?.current_trusted_head) fail("CRG cache key inputs are invalid");
@@ -24,6 +29,17 @@ export function readCrgBuildCache({ projectRoot, key } = {}) {
   let entry; try { entry = JSON.parse(raw); } catch { fail("CRG cache entry is malformed"); }
   if (!entry || entry.key !== key || entry.digest !== hash(JSON.stringify({ key: entry.key, version: entry.version }))) fail("CRG cache entry does not match");
   return Object.freeze(entry);
+}
+
+export function crgCacheDataDirectory({ projectRoot, key, create = false } = {}) {
+  if (typeof key !== "string" || !/^[a-f0-9]{64}$/.test(key)) fail("CRG cache key is invalid");
+  const path = resolve(directory(projectRoot), `${key}.data`);
+  if (!existsSync(path)) {
+    if (!create) return null;
+    mkdirSync(path, { recursive: true, mode: 0o700 });
+    chmodSync(path, 0o700);
+  }
+  return safeDirectory(path);
 }
 
 export function writeCrgBuildCache({ projectRoot, key, version } = {}) {
