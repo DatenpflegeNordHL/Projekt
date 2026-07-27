@@ -463,3 +463,107 @@ export function verifyLegacyCrgRepositoryState(snapshot, projectRoot = snapshot?
   }
   return actual;
 }
+
+export const CRG_MACOS_SANDBOX_COMMAND = "/usr/bin/sandbox-exec";
+
+function sandboxLiteral(path) {
+  return `"${path.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")}"`;
+}
+
+function validateSandboxCommand(path) {
+  return canonicalRegularFile(
+    path,
+    "macOS sandbox command",
+    "CODEXLOOPER_CRG_SANDBOX_UNAVAILABLE",
+  ).path;
+}
+
+function createCrgMacosSandboxProfile({ paths, environmentRoot, interpreterPath, commandPath }) {
+  const environment = canonicalDirectory(environmentRoot, "CRG environment root");
+  const interpreter = canonicalRegularFile(interpreterPath, "CRG interpreter").path;
+  const command = canonicalRegularFile(commandPath, "CRG console command", "CODEXLOOPER_CRG_UNSAFE_COMMAND").path;
+  if (!relativeInside(environment, command)) {
+    foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG console command must stay inside the sealed environment");
+  }
+  const readable = [
+    paths.project_root,
+    environment,
+    interpreter,
+    "/System",
+    "/usr/lib",
+    "/usr/share",
+    "/usr/bin",
+    "/bin",
+    "/dev",
+  ];
+  return {
+    command,
+    profile: [
+      "(version 1)",
+      "(deny default)",
+      "(deny network*)",
+      "(allow process*)",
+      ...readable.map((path) => `(allow file-read* (subpath ${sandboxLiteral(path)}))`),
+      `(allow file-write* (subpath ${sandboxLiteral(paths.run_dir)}))`,
+    ].join("\n"),
+  };
+}
+
+function createPinnedCrgArguments({ commandPath, operation, projectRoot, dataDir, baseSha }) {
+  if (operation === "version") return [commandPath, "--version"];
+  if (operation === "build") {
+    return [commandPath, "build", "--repo", projectRoot, "--skip-flows", "--data-dir", dataDir];
+  }
+  if (operation === "detect-changes") {
+    if (typeof baseSha !== "string" || !SHA.test(baseSha)) {
+      foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG detect-changes requires a lowercase 40-hex base SHA");
+    }
+    return [commandPath, "detect-changes", "--repo", projectRoot, "--base", baseSha];
+  }
+  foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG operation is not allowlisted");
+}
+
+export function createCrgMacosSandboxLaunch({
+  projectRoot,
+  runDir,
+  homeDir,
+  dataDir,
+  environmentRoot,
+  interpreterPath,
+  commandPath,
+  sandboxCommand = CRG_MACOS_SANDBOX_COMMAND,
+  operation = "version",
+  baseSha,
+  expectedProfileSha256,
+} = {}) {
+  const paths = validateCrgPrivatePaths({ projectRoot, runDir, homeDir, dataDir });
+  const sandbox = validateSandboxCommand(sandboxCommand);
+  const sandboxProfile = createCrgMacosSandboxProfile({
+    paths,
+    environmentRoot,
+    interpreterPath,
+    commandPath,
+  });
+  const profileSha256 = foundationSha256(sandboxProfile.profile);
+  if (
+    expectedProfileSha256 !== undefined &&
+    (typeof expectedProfileSha256 !== "string" || !/^[a-f0-9]{64}$/.test(expectedProfileSha256) || expectedProfileSha256 !== profileSha256)
+  ) {
+    foundationFail("CODEXLOOPER_CRG_SANDBOX_DENIED", "macOS sandbox profile identity does not match");
+  }
+  const crgArgs = createPinnedCrgArguments({
+    commandPath: sandboxProfile.command,
+    operation,
+    projectRoot: paths.project_root,
+    dataDir: paths.data_dir,
+    baseSha,
+  });
+  return Object.freeze({
+    executable: sandbox,
+    args: Object.freeze(["-p", sandboxProfile.profile, ...crgArgs]),
+    shell: false,
+    env: createCrgChildEnvironment({ projectRoot, runDir, homeDir, dataDir }),
+    profile: sandboxProfile.profile,
+    profile_sha256: profileSha256,
+  });
+}

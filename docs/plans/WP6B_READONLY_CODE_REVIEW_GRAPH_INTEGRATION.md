@@ -409,7 +409,7 @@ paths, canonical executable and configuration validation, and static verified
 macOS sandbox launch construction with focused tests. Do not execute CRG, write
 reports, add runner plumbing, or add Sol in this task.
 
-- [ ] Task 3 complete.
+- [x] Task 3 complete.
 
 ### Task 4: Bounded standalone CRG process execution and private reports
 

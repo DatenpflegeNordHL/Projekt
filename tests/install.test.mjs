@@ -398,6 +398,10 @@ test("Terra and Sol wrappers remain separate budgeted read-only invocations", ()
           { type: "exact", value: "docs/plans/fixture.md" },
         ],
         validation_commands: ["test -f docs/plans/fixture.md"],
+        full_project_check: {
+          package_json_sha256: createHash("sha256").update(readFileSync(join(projectRoot, "package.json"), "utf8"), "utf8").digest("hex"),
+          check_script: "node --check check.mjs",
+        },
       })}\n`,
       { mode: 0o600 },
     );
