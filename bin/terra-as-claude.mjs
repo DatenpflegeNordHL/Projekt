@@ -2,7 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import {
@@ -24,6 +24,9 @@ const MAX_STDERR_BYTES = 16_384;
 const MAX_TOOL_DIAGNOSTICS = 20;
 const MAX_TOOL_DIAGNOSTIC_TEXT = 8_000;
 const MAX_REJECTED_RESPONSE_BYTES = 65_536;
+const MAX_RETRY_CONTEXT_BYTES = 4_096;
+const RETRY_CONTEXT_FILE = "builder-retry-context.json";
+const RETRY_CONTEXT_CONSUMED_FILE = "builder-retry-context-consumed.json";
 
 function fail(message) {
   throw new Error(message);
@@ -166,6 +169,100 @@ function retainRejectedBuilderResponse(message, phase, error) {
   return artifactPath;
 }
 
+function retryContextPath(name) {
+  return resolve(exactPrivateRunDirectory(), name);
+}
+
+function validRetryContext(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const expected = [
+    "category",
+    "failure_code",
+    "operation_index",
+    "operation_type",
+    "path",
+    "reason",
+    "schema",
+  ];
+  if (Object.keys(value).sort().join("\0") !== expected.join("\0")) return null;
+  if (
+    value.schema !== "codexlooper.builder-retry-context.v1" ||
+    value.failure_code !== "CODEXLOOPER_BUILDER_OPERATION_PRECONDITION_FAILED" ||
+    value.category !== "operation_precondition" ||
+    !Number.isSafeInteger(value.operation_index) ||
+    value.operation_index < 0 ||
+    !["create_file", "replace_exact"].includes(value.operation_type) ||
+    typeof value.path !== "string" ||
+    !value.path ||
+    Buffer.byteLength(value.path, "utf8") > 1_024 ||
+    typeof value.reason !== "string" ||
+    !value.reason ||
+    Buffer.byteLength(value.reason, "utf8") > 256
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    failure_code: value.failure_code,
+    category: value.category,
+    operation_index: value.operation_index,
+    operation_type: value.operation_type,
+    path: value.path,
+    reason: value.reason,
+  });
+}
+
+function retainBuilderRetryContext(context) {
+  if (!context) return;
+  const artifactPath = retryContextPath(RETRY_CONTEXT_FILE);
+  const serialized = `${JSON.stringify({
+    schema: "codexlooper.builder-retry-context.v1",
+    ...context,
+  })}\n`;
+  if (Buffer.byteLength(serialized, "utf8") > MAX_RETRY_CONTEXT_BYTES) {
+    fail("Builder retry context exceeds its bounded size");
+  }
+  if (existsSync(retryContextPath(RETRY_CONTEXT_CONSUMED_FILE))) return;
+  writeFileSync(artifactPath, serialized, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  chmodSync(artifactPath, 0o600);
+}
+
+function consumeBuilderRetryContext() {
+  const artifactPath = retryContextPath(RETRY_CONTEXT_FILE);
+  const consumedPath = retryContextPath(RETRY_CONTEXT_CONSUMED_FILE);
+  if (existsSync(consumedPath)) {
+    rmSync(artifactPath, { force: true });
+    return null;
+  }
+  if (!existsSync(artifactPath)) return null;
+  let context;
+  try {
+    const serialized = readFileSync(artifactPath, "utf8");
+    if (Buffer.byteLength(serialized, "utf8") > MAX_RETRY_CONTEXT_BYTES) return null;
+    context = validRetryContext(JSON.parse(serialized));
+  } catch {
+    context = null;
+  }
+  writeFileSync(
+    consumedPath,
+    `${JSON.stringify({ schema: "codexlooper.builder-retry-context-consumed.v1" })}\n`,
+    { encoding: "utf8", mode: 0o600, flag: "wx" },
+  );
+  chmodSync(consumedPath, 0o600);
+  rmSync(artifactPath, { force: true });
+  return context;
+}
+
+function retryContextGuidance(context) {
+  if (!context) return "";
+  return `\n\nTrusted host retry context (re-read the immutable snapshot and return a corrected strict Builder Envelope v2 object):
+- failure_code: ${context.failure_code}
+- category: ${context.category}
+- operation_index: ${context.operation_index}
+- operation_type: ${context.operation_type}
+- path: ${context.path}
+- reason: ${context.reason}`;
+}
+
 function planCompleted(projectRoot = process.cwd(), sourceEnv = process.env) {
   const policyPath = sourceEnv.CODEXLOOPER_RUN_POLICY;
   if (typeof policyPath !== "string" || !policyPath) fail("Run policy is unavailable for completion check");
@@ -214,6 +311,8 @@ function builderEnvelopeV2Guidance(phase) {
 - Each operation must be either {"type":"create_file","path":"...","content":"...","expected_absent":true} or {"type":"replace_exact","path":"...","expected_file_sha256":"...","old_text":"...","new_text":"...","expected_occurrences":1}.
 - Do not author a Git diff, hunk headers, Apply-Patch markers, or any patch text. Do not run git apply, including git apply --check; the host materializes operations and generates the canonical diff.
 - Re-read every existing replacement target immediately before constructing its expected_file_sha256, old_text, and new_text. The expected_file_sha256 is the lowercase SHA-256 of the complete current UTF-8 file content; old_text must occur exactly once.
+- For every replace_exact, use a distinctive block confirmed to occur exactly once in the immutable snapshot. Never use a short structural anchor such as a bare closing brace, generic return statement, import line, or other fragment likely to recur. Prefer complete current file content for a whole-file replacement; otherwise use a complete named function, class, or block with enough unique surrounding context.
+- Inspect silently. Your first and only substantive agent response must be the strict Builder Envelope v2 JSON object; never emit planning or progress prose.
 - Every changed path must be permitted by the active plan. A valid non-final task envelope may omit a canonical plan checkbox while work remains. Include its exact checkbox change only in the final envelope that completes the task.
 - Do not mark a task checkbox complete unless the operations cover every requirement and required test category for that task. Tests must be authored as create_file or replace_exact operations even though they cannot be executed inside the read-only model snapshot.
 - Never emit Ralphex markers or control signals alongside a Builder Envelope v2 JSON object.
@@ -241,7 +340,8 @@ try {
 
   const internalReview = prompt.includes("<<<RALPHEX:REVIEW_DONE>>>");
   const phase = internalReview ? "review" : "task";
-  prompt = `${builderEnvelopeV2Guidance(phase)}\n\n${reviewGuidance(internalReview)}${prompt}`;
+  const retryContext = consumeBuilderRetryContext();
+  prompt = `${builderEnvelopeV2Guidance(phase)}${retryContextGuidance(retryContext)}\n\n${reviewGuidance(internalReview)}${prompt}`;
   snapshot = createBuilderSnapshot();
 
   const launch = prepareProfileLaunch("builder", {
@@ -359,9 +459,14 @@ try {
       });
     }
 
-    supervised = envelope.operations
-      ? applyBuilderOperations({ envelope: envelope.operations, phase })
-      : { committed: false };
+    try {
+      supervised = envelope.operations
+        ? applyBuilderOperations({ envelope: envelope.operations, phase })
+        : { committed: false };
+    } catch (error) {
+      retainBuilderRetryContext(error.builderRetryContext);
+      throw error;
+    }
     effectivePatch = supervised.canonical_diff || "";
 
     if (payloadArtifact && supervised.committed) {

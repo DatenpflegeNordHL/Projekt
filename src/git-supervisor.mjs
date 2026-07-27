@@ -960,6 +960,32 @@ function materializeBuilderOperationsCandidate({ root, operations, declared, pol
   }
 }
 
+function builderOperationPreconditionRetryContext(error, operations) {
+  if (error?.code !== "CODEXLOOPER_BUILDER_OPERATION_PRECONDITION_FAILED") return null;
+  const reasons = [
+    ["create_file", "create_file target already exists", "target already exists"],
+    ["replace_exact", "replace_exact target is absent", "target is absent"],
+    ["replace_exact", "replace_exact baseline hash is stale", "baseline hash is stale"],
+    ["replace_exact", "replace_exact old_text must occur exactly once", "old_text matched zero or multiple locations"],
+  ];
+  for (let index = 0; index < operations.length; index += 1) {
+    const operation = operations[index];
+    for (const [type, prefix, reason] of reasons) {
+      if (operation.type === type && error.message === `${prefix}: ${operation.path}`) {
+        return Object.freeze({
+          failure_code: error.code,
+          category: "operation_precondition",
+          operation_index: index,
+          operation_type: operation.type,
+          path: operation.path,
+          reason,
+        });
+      }
+    }
+  }
+  return null;
+}
+
 export function applyBuilderPatch({
   patch,
   phase,
@@ -1055,13 +1081,20 @@ export function applyBuilderOperations({
   const { policy } = loadPolicy(sourceEnv, root);
   const declared = validated.operations.map((operation) => operation.path).sort();
   validatePaths(declared, policy.allowed_paths);
-  const canonicalDiff = materializeBuilderOperationsCandidate({
-    root,
-    operations: validated.operations,
-    declared,
-    policy,
-    sourceEnv,
-  });
+  let canonicalDiff;
+  try {
+    canonicalDiff = materializeBuilderOperationsCandidate({
+      root,
+      operations: validated.operations,
+      declared,
+      policy,
+      sourceEnv,
+    });
+  } catch (error) {
+    const retryContext = builderOperationPreconditionRetryContext(error, validated.operations);
+    if (retryContext) error.builderRetryContext = retryContext;
+    throw error;
+  }
   const result = applyBuilderPatch({
     patch: canonicalDiff,
     phase,

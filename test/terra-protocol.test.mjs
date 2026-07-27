@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readdirSync,
@@ -32,12 +33,16 @@ function writeFakeCodex(
   agentText = null,
   requiredPromptFragments = [],
   forbiddenPromptFragments = [],
+  promptCapturePath = null,
 ) {
   const lines = [
     '#!/usr/bin/env node',
-    'import { readFileSync } from "node:fs";',
+    'import { readFileSync, writeFileSync } from "node:fs";',
     'const prompt = readFileSync(0, "utf8");',
   ];
+  if (promptCapturePath) {
+    lines.push(`writeFileSync(${JSON.stringify(promptCapturePath)}, prompt, "utf8");`);
+  }
   for (const fragment of requiredPromptFragments) {
     lines.push(
       `if (!prompt.includes(${JSON.stringify(fragment)})) process.exit(41);`,
@@ -65,6 +70,7 @@ function fixture({
   requiredPromptFragments = [],
   forbiddenPromptFragments = [],
   planContent = "# Plan\n\n- [x] Complete\n",
+  promptCapturePath = null,
 } = {}) {
   const project = realpathSync(
     mkdtempSync(join(tmpdir(), "codexlooper-terra-protocol-")),
@@ -91,7 +97,7 @@ function fixture({
   mkdirSync(join(project, "docs", "plans"), { recursive: true });
 
   const codex = join(tools, "codex");
-  writeFakeCodex(codex, agentText, requiredPromptFragments, forbiddenPromptFragments);
+  writeFakeCodex(codex, agentText, requiredPromptFragments, forbiddenPromptFragments, promptCapturePath);
 
   writeFileSync(
     join(codexHome, "config.toml"),
@@ -164,6 +170,14 @@ function rejectedResponseArtifacts(runDirectory) {
     .sort();
 }
 
+function retryContextPath(runDirectory) {
+  return join(runDirectory, "builder-retry-context.json");
+}
+
+function consumedRetryContextPath(runDirectory) {
+  return join(runDirectory, "builder-retry-context-consumed.json");
+}
+
 function replaceValueEnvelope({ path = "src/value.mjs", oldText = "value = 1", newText = "value = 2" } = {}) {
   const original = "export const value = 1;\n";
   return JSON.stringify({
@@ -230,6 +244,8 @@ test("retains a private Builder Envelope v2 artifact when host policy rejects it
     requiredPromptFragments: [
       "The read-only filesystem is intentional",
       "Do not run tests or validation commands inside the model sandbox",
+      "Never use a short structural anchor such as a bare closing brace",
+      "Inspect silently. Your first and only substantive agent response",
       "Builder Envelope v2",
       "Do not author a Git diff",
       "The trusted host alone derives continuation and completion",
@@ -249,6 +265,67 @@ test("retains a private Builder Envelope v2 artifact when host policy rejects it
     assert.equal(statSync(artifactPath).mode & 0o777, 0o600);
     assert.equal(readFileSync(join(current.project, "README.md"), "utf8"), "fixture\n");
     assert.equal(git(current.project, ["status", "--porcelain=v1"]), "");
+  } finally {
+    rmSync(current.project, { recursive: true, force: true });
+  }
+});
+
+test("a safe replace_exact precondition failure supplies one private typed retry context", () => {
+  const first = replaceValueEnvelope({ oldText: " " });
+  const promptCapturePath = join(tmpdir(), `codexlooper-retry-prompt-${process.pid}-${Date.now()}.txt`);
+  const current = fixture({ agentText: first });
+  try {
+    const firstResult = runAdapter(current);
+    assert.notEqual(firstResult.status, 0);
+    const contextPath = retryContextPath(current.runDirectory);
+    const context = JSON.parse(readFileSync(contextPath, "utf8"));
+    assert.deepEqual(context, {
+      schema: "codexlooper.builder-retry-context.v1",
+      failure_code: "CODEXLOOPER_BUILDER_OPERATION_PRECONDITION_FAILED",
+      category: "operation_precondition",
+      operation_index: 0,
+      operation_type: "replace_exact",
+      path: "src/value.mjs",
+      reason: "old_text matched zero or multiple locations",
+    });
+    assert.equal(statSync(contextPath).mode & 0o777, 0o600);
+    assert.ok(statSync(contextPath).size <= 4_096);
+
+    writeFakeCodex(current.codex, replaceValueEnvelope(), [], [], promptCapturePath);
+    const secondResult = runAdapter(current);
+    assert.equal(secondResult.status, 0, secondResult.stderr || secondResult.stdout);
+    const retryPrompt = readFileSync(promptCapturePath, "utf8");
+    assert.match(retryPrompt, /failure_code: CODEXLOOPER_BUILDER_OPERATION_PRECONDITION_FAILED/u);
+    assert.match(retryPrompt, /path: src\/value\.mjs/u);
+    assert.match(retryPrompt, /re-read the immutable snapshot/u);
+    assert.equal(retryPrompt.includes(first), false);
+    assert.equal(retryPrompt.includes("return actual"), false);
+    assert.equal(existsSync(retryContextPath(current.runDirectory)), false);
+    assert.equal(statSync(consumedRetryContextPath(current.runDirectory)).mode & 0o777, 0o600);
+
+    const unrelatedPromptPath = join(tmpdir(), `codexlooper-unrelated-prompt-${process.pid}-${Date.now()}.txt`);
+    const unrelated = fixture({ agentText: replaceValueEnvelope(), promptCapturePath: unrelatedPromptPath });
+    try {
+      const unrelatedResult = runAdapter(unrelated);
+      assert.equal(unrelatedResult.status, 0, unrelatedResult.stderr || unrelatedResult.stdout);
+      assert.equal(readFileSync(unrelatedPromptPath, "utf8").includes("operation_precondition"), false);
+    } finally {
+      rmSync(unrelatedPromptPath, { force: true });
+      rmSync(unrelated.project, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(promptCapturePath, { force: true });
+    rmSync(current.project, { recursive: true, force: true });
+  }
+});
+
+test("retry context is one-shot and a repeated precondition failure remains blocked", () => {
+  const current = fixture({ agentText: replaceValueEnvelope({ oldText: "not present" }) });
+  try {
+    assert.notEqual(runAdapter(current).status, 0);
+    assert.notEqual(runAdapter(current).status, 0);
+    assert.equal(existsSync(retryContextPath(current.runDirectory)), false);
+    assert.equal(existsSync(consumedRetryContextPath(current.runDirectory)), true);
   } finally {
     rmSync(current.project, { recursive: true, force: true });
   }
@@ -286,6 +363,7 @@ test("retains bounded, redacted private diagnostics for malformed Builder respon
       assert.equal(statSync(artifactPath).mode & 0o777, 0o600);
       assert.ok(Buffer.byteLength(artifact.response, "utf8") <= 65_536);
       assert.equal(readFileSync(artifactPath, "utf8").includes("closerouter_test_secret"), false);
+      assert.equal(existsSync(retryContextPath(current.runDirectory)), false);
       assert.equal(readFileSync(join(current.project, "src", "value.mjs"), "utf8"), "export const value = 1;\n");
       assert.equal(git(current.project, ["status", "--porcelain=v1"]), "");
     } finally {
