@@ -12,7 +12,11 @@ import {
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { applyBuilderPatch, superviseBuilderChanges } from "../src/git-supervisor.mjs";
+import {
+  applyBuilderOperations,
+  applyBuilderPatch,
+  superviseBuilderChanges,
+} from "../src/git-supervisor.mjs";
 import { removeTree } from "./helpers/remove-tree.mjs";
 
 function git(root, args) {
@@ -225,6 +229,146 @@ test("single-task rejects a canonical plan patch that differs from the bound com
     assert.match(readFileSync(planPath, "utf8"), /- \[ \] Task 2 complete\./);
     assert.equal(git(current.root, ["status", "--porcelain=v1"]), "");
     assert.equal(git(current.root, ["rev-list", "--count", "HEAD"]), "1");
+  } finally {
+    removeTree(current.root);
+  }
+});
+
+test("materializes Builder Envelope v2 only in a candidate and commits its host-generated diff", () => {
+  const current = fixture({ singleTaskPlan: true });
+  try {
+    const { planPath, original: originalPlan, completed } = configureSingleTaskPolicy(current);
+    const originalValue = readFileSync(join(current.root, "src", "value.mjs"), "utf8");
+    const result = applyBuilderOperations({
+      envelope: {
+        version: 2,
+        operations: [
+          {
+            type: "create_file",
+            path: "src/new-value.mjs",
+            content: "export const newValue = true;\n",
+            expected_absent: true,
+          },
+          {
+            type: "replace_exact",
+            path: "src/value.mjs",
+            expected_file_sha256: sha256(originalValue),
+            old_text: "value = 1",
+            new_text: "value = 2",
+            expected_occurrences: 1,
+          },
+          {
+            type: "replace_exact",
+            path: "docs/plans/feature.md",
+            expected_file_sha256: sha256(originalPlan),
+            old_text: "- [ ] Task 1 complete.",
+            new_text: "- [x] Task 1 complete.",
+            expected_occurrences: 1,
+          },
+        ],
+      },
+      phase: "task",
+      sourceEnv: sourceEnv(current),
+      projectRoot: current.root,
+    });
+    assert.equal(result.committed, true);
+    assert.match(result.canonical_diff, /^diff --git a\/docs\/plans\/feature\.md b\/docs\/plans\/feature\.md/m);
+    assert.match(result.canonical_diff, /^diff --git a\/src\/new-value\.mjs b\/src\/new-value\.mjs/m);
+    assert.doesNotMatch(result.canonical_diff, /--recount/u);
+    assert.deepEqual(result.changed_paths, [
+      "docs/plans/feature.md",
+      "src/new-value.mjs",
+      "src/value.mjs",
+    ]);
+    assert.equal(readFileSync(join(current.root, "src", "value.mjs"), "utf8"), "export const value = 2;\n");
+    assert.equal(readFileSync(join(current.root, "src", "new-value.mjs"), "utf8"), "export const newValue = true;\n");
+    assert.equal(readFileSync(planPath, "utf8"), completed);
+    assert.equal(git(current.root, ["status", "--porcelain=v1"]), "");
+    const event = readFileSync(resolve(current.runDirectory, "host-commits.jsonl"), "utf8");
+    assert.match(event, /"transport":"builder_envelope_v2_host_generated_diff"/u);
+    assert.match(event, /"tree_identity_match":true/u);
+  } finally {
+    removeTree(current.root);
+  }
+});
+
+test("rejects unauthorized or invalid Builder Envelope v2 operations without changing the host", () => {
+  const current = fixture();
+  try {
+    const start = git(current.root, ["rev-parse", "HEAD"]);
+    assert.throws(
+      () =>
+        applyBuilderOperations({
+          envelope: {
+            version: 2,
+            operations: [{
+              type: "create_file",
+              path: "README.md",
+              content: "outside policy\n",
+              expected_absent: true,
+            }],
+          },
+          phase: "task",
+          sourceEnv: sourceEnv(current),
+          projectRoot: current.root,
+        }),
+      (error) => error.code === "CODEXLOOPER_PATH_POLICY_VIOLATION",
+    );
+    const original = readFileSync(join(current.root, "src", "value.mjs"), "utf8");
+    assert.throws(
+      () =>
+        applyBuilderOperations({
+          envelope: {
+            version: 2,
+            operations: [{
+              type: "replace_exact",
+              path: "src/value.mjs",
+              expected_file_sha256: sha256(original),
+              old_text: "value = 1",
+              new_text: "value = ;",
+              expected_occurrences: 1,
+            }],
+          },
+          phase: "task",
+          sourceEnv: sourceEnv(current),
+          projectRoot: current.root,
+        }),
+      (error) => error.code === "CODEXLOOPER_HOST_COMMAND_FAILED",
+    );
+    assert.equal(git(current.root, ["rev-parse", "HEAD"]), start);
+    assert.equal(git(current.root, ["status", "--porcelain=v1"]), "");
+    assert.equal(readFileSync(join(current.root, "src", "value.mjs"), "utf8"), original);
+  } finally {
+    removeTree(current.root);
+  }
+});
+
+test("Builder Envelope v2 remains bound to the canonical single-task plan checkbox", () => {
+  const current = fixture({ singleTaskPlan: true });
+  try {
+    const { original } = configureSingleTaskPolicy(current);
+    assert.throws(
+      () =>
+        applyBuilderOperations({
+          envelope: {
+            version: 2,
+            operations: [{
+              type: "replace_exact",
+              path: "docs/plans/feature.md",
+              expected_file_sha256: sha256(original),
+              old_text: "- [ ] Task 2 complete.",
+              new_text: "- [x] Task 2 complete.",
+              expected_occurrences: 1,
+            }],
+          },
+          phase: "task",
+          sourceEnv: sourceEnv(current),
+          projectRoot: current.root,
+        }),
+      (error) => error.code === "CODEXLOOPER_SINGLE_TASK_PLAN_MUTATION",
+    );
+    assert.equal(readFileSync(join(current.root, "docs", "plans", "feature.md"), "utf8"), original);
+    assert.equal(git(current.root, ["status", "--porcelain=v1"]), "");
   } finally {
     removeTree(current.root);
   }

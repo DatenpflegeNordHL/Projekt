@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -139,10 +140,25 @@ function runAdapter(current) {
   });
 }
 
-function patchArtifacts(runDirectory) {
+function payloadArtifacts(runDirectory) {
   return readdirSync(runDirectory)
-    .filter((name) => /^builder-patch-\d+-\d+\.diff$/u.test(name))
+    .filter((name) => /^builder-envelope-\d+-\d+\.json$/u.test(name))
     .sort();
+}
+
+function replaceValueEnvelope({ path = "src/value.mjs", oldText = "value = 1", newText = "value = 2" } = {}) {
+  const original = "export const value = 1;\n";
+  return JSON.stringify({
+    version: 2,
+    operations: [{
+      type: "replace_exact",
+      path,
+      expected_file_sha256: createHash("sha256").update(original, "utf8").digest("hex"),
+      old_text: oldText,
+      new_text: newText,
+      expected_occurrences: 1,
+    }],
+  });
 }
 
 test("Terra wrapper rejects a successful Codex stream with no agent message", () => {
@@ -151,26 +167,29 @@ test("Terra wrapper rejects a successful Codex stream with no agent message", ()
     const result = runAdapter(current);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /no agent message/u);
-    assert.deepEqual(patchArtifacts(current.runDirectory), []);
+    assert.deepEqual(payloadArtifacts(current.runDirectory), []);
   } finally {
     rmSync(current.project, { recursive: true, force: true });
   }
 });
 
-test("retains a private builder patch artifact when host policy rejects it", () => {
-  const patch = `diff --git a/README.md b/README.md
---- a/README.md
-+++ b/README.md
-@@ -1 +1 @@
--fixture
-+outside policy
-`;
+test("retains a private Builder Envelope v2 artifact when host policy rejects it", () => {
+  const payload = JSON.stringify({
+    version: 2,
+    operations: [{
+      type: "create_file",
+      path: "README.md",
+      content: "outside policy\n",
+      expected_absent: true,
+    }],
+  });
   const current = fixture({
-    agentText: JSON.stringify({ version: 1, patch, signal: "" }),
+    agentText: payload,
     requiredPromptFragments: [
       "The read-only filesystem is intentional",
       "Do not run tests or validation commands inside the model sandbox",
-      "Re-read every existing target file immediately before constructing the final patch",
+      "Builder Envelope v2",
+      "Do not author a Git diff",
       "Never use TASK_FAILED solely because the snapshot is read-only",
     ],
   });
@@ -180,11 +199,11 @@ test("retains a private builder patch artifact when host policy rejects it", () 
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /outside the plan policy/u);
 
-    const artifacts = patchArtifacts(current.runDirectory);
+    const artifacts = payloadArtifacts(current.runDirectory);
     assert.equal(artifacts.length, 1);
 
     const artifactPath = join(current.runDirectory, artifacts[0]);
-    assert.equal(readFileSync(artifactPath, "utf8"), patch);
+    assert.equal(readFileSync(artifactPath, "utf8"), payload);
     assert.equal(statSync(artifactPath).mode & 0o777, 0o600);
     assert.equal(readFileSync(join(current.project, "README.md"), "utf8"), "fixture\n");
     assert.equal(git(current.project, ["status", "--porcelain=v1"]), "");
@@ -193,32 +212,26 @@ test("retains a private builder patch artifact when host policy rejects it", () 
   }
 });
 
-test("retains a private mixed-dialect patch artifact and gives a rewrite retry", () => {
+test("rejects raw model-authored unified diffs on the active Builder Envelope v2 path", () => {
   const patch = `diff --git a/src/value.mjs b/src/value.mjs
 --- a/src/value.mjs
 +++ b/src/value.mjs
 @@ -1 +1 @@
 -export const value = 1;
 +export const value = 2;
-*** End Patch
 `;
   const current = fixture({
-    agentText: JSON.stringify({ version: 1, patch, signal: "" }),
+    agentText: patch,
     requiredPromptFragments: [
-      "Never emit Apply-Patch markers",
-      "Every file block needs diff --git",
-      "rewrite the complete patch if any appear",
+      "Do not author a Git diff",
+      "Do not run git apply, including git apply --check",
     ],
   });
   try {
     const result = runAdapter(current);
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /no Apply-Patch markers.*every file block needs diff --git.*rewrite the complete patch/u);
-    const artifacts = patchArtifacts(current.runDirectory);
-    assert.equal(artifacts.length, 1);
-    const artifactPath = join(current.runDirectory, artifacts[0]);
-    assert.equal(readFileSync(artifactPath, "utf8"), patch);
-    assert.equal(statSync(artifactPath).mode & 0o777, 0o600);
+    assert.match(result.stderr, /Builder Envelope v2 must be one strict JSON object/u);
+    assert.deepEqual(payloadArtifacts(current.runDirectory), []);
     assert.equal(readFileSync(join(current.project, "src", "value.mjs"), "utf8"), "export const value = 1;\n");
     assert.equal(git(current.project, ["status", "--porcelain=v1"]), "");
   } finally {
@@ -226,24 +239,14 @@ test("retains a private mixed-dialect patch artifact and gives a rewrite retry",
   }
 });
 
-test("Terra prompt requires a non-mutating final unified-diff check without weakening patch policy", () => {
-  const patch = `diff --git a/src/value.mjs b/src/value.mjs
---- a/src/value.mjs
-+++ b/src/value.mjs
-@@ -1 +1 @@
--export const value = 1;
-+export const value = 2;
-`;
+test("Terra prompt requires a strict Builder Envelope v2 response without a snapshot patch check", () => {
   const current = fixture({
-    agentText: JSON.stringify({ version: 1, patch, signal: "" }),
+    agentText: replaceValueEnvelope(),
     requiredPromptFragments: [
-      "Sole validation exception: for every non-empty patch",
-      "feed the exact final textual unified diff to `git apply --check`",
-      "exact patch that will be returned",
-      "If the check fails, correct the patch text and check it again",
-      "after a successful check, do not edit the patch",
-      "Do not use `--recount`, `git apply` without `--check`",
-      "any command that writes to the snapshot",
+      "Your final response for a non-empty successful result must be exactly one plain JSON object",
+      "That object must be Builder Envelope v2",
+      "Do not author a Git diff, hunk headers, Apply-Patch markers, or any patch text",
+      "Do not run git apply, including git apply --check",
       "Never edit, create, delete, rename, copy, or chmod files",
       "Do not run tests or validation commands inside the model sandbox",
     ],
@@ -251,7 +254,7 @@ test("Terra prompt requires a non-mutating final unified-diff check without weak
   try {
     const result = runAdapter(current);
     assert.equal(result.status, 0, result.stderr || result.stdout);
-    assert.deepEqual(patchArtifacts(current.runDirectory), []);
+    assert.deepEqual(payloadArtifacts(current.runDirectory), []);
     assert.equal(readFileSync(join(current.project, "src", "value.mjs"), "utf8"), "export const value = 2;\n");
     assert.equal(git(current.project, ["status", "--porcelain=v1"]), "");
   } finally {
@@ -260,19 +263,12 @@ test("Terra prompt requires a non-mutating final unified-diff check without weak
 });
 
 test("removes the builder patch artifact after a successful host commit", () => {
-  const patch = `diff --git a/src/value.mjs b/src/value.mjs
---- a/src/value.mjs
-+++ b/src/value.mjs
-@@ -1 +1 @@
--export const value = 1;
-+export const value = 2;
-`;
   const current = fixture({
-    agentText: JSON.stringify({ version: 1, patch, signal: "" }),
+    agentText: replaceValueEnvelope(),
     requiredPromptFragments: [
       "The read-only filesystem is intentional",
       "Do not run tests or validation commands inside the model sandbox",
-      "Re-read every existing target file immediately before constructing the final patch",
+      "Builder Envelope v2",
       "Never use TASK_FAILED solely because the snapshot is read-only",
     ],
   });
@@ -280,7 +276,7 @@ test("removes the builder patch artifact after a successful host commit", () => 
   try {
     const result = runAdapter(current);
     assert.equal(result.status, 0, result.stderr || result.stdout);
-    assert.deepEqual(patchArtifacts(current.runDirectory), []);
+    assert.deepEqual(payloadArtifacts(current.runDirectory), []);
     assert.equal(
       readFileSync(join(current.project, "src", "value.mjs"), "utf8"),
       "export const value = 2;\n",

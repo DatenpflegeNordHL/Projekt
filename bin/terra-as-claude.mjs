@@ -9,13 +9,13 @@ import {
   recordCodexDiagnosticLine,
   sanitizeCodexDiagnosticLine,
 } from "../src/codex-diagnostics.mjs";
-import { parseBuilderEnvelope } from "../src/builder-envelope.mjs";
+import { parseBuilderOperationEnvelopeV2 } from "../src/builder-envelope.mjs";
 import {
   captureBuilderSnapshotPatch,
   cleanupBuilderSnapshot,
   createBuilderSnapshot,
 } from "../src/builder-snapshot.mjs";
-import { applyBuilderPatch, superviseBuilderChanges } from "../src/git-supervisor.mjs";
+import { applyBuilderOperations } from "../src/git-supervisor.mjs";
 import { prepareProfileLaunch } from "../src/profiles.mjs";
 import { recordCodexUsageLine } from "../src/telemetry.mjs";
 
@@ -98,19 +98,21 @@ function parseLegacySignal(text, phase) {
   };
 }
 
-function parseEnvelopeMessages(messages, phase, snapshotPatch) {
+function parseOperationMessages(messages, phase) {
   let lastError;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const legacy = parseLegacySignal(messages[index], phase);
+    if (legacy) return legacy;
     try {
-      return parseBuilderEnvelope(messages[index], phase);
+      return {
+        operations: parseBuilderOperationEnvelopeV2(messages[index]),
+        signal: "",
+        summary: "",
+        raw_payload: messages[index],
+      };
     } catch (error) {
       lastError = error;
-      const legacy = parseLegacySignal(messages[index], phase);
-      if (legacy) return legacy;
     }
-  }
-  if (snapshotPatch.trim()) {
-    return { version: 1, patch: "", signal: "", summary: "", snapshot_fallback: true };
   }
   throw lastError || new Error("Codex builder returned no usable agent result");
 }
@@ -151,32 +153,26 @@ function hostSignal({ phase, requestedSignal, committed, effectivePatch }) {
   return committed || effectivePatch.trim() ? "" : "<<<RALPHEX:REVIEW_DONE>>>";
 }
 
-function structuredPatchGuidance(phase) {
+function builderEnvelopeV2Guidance(phase) {
   const phaseSignal =
     phase === "review"
       ? "Use REVIEW_DONE only when no issue exists. If you provide a fix patch, use an empty signal."
       : "Use ALL_TASKS_DONE only when the patch completes every actionable plan item. Otherwise use an empty signal.";
-  return `CodexLooper read-only patch policy:
+  return `CodexLooper read-only Builder Envelope v2 policy:
 - You are running inside a disposable read-only clone of the repository. The real project is never writable from this session.
 - Inspect files with read-only shell commands, git status, git diff, and git log.
 - The read-only filesystem is intentional. Do not run tests or validation commands inside the model sandbox when they may create temporary files, caches, lockfiles, coverage data, or other writes.
 - Inability to create files or execute write-producing validation inside the snapshot is expected and is not a task blocker. The trusted host performs validation after accepting the patch.
 - Never edit, create, delete, rename, copy, or chmod files. Never run git-mutating commands.
-- Construct the required textual git unified diff directly from the inspected file contents and return it in the patch field. Do not rely on tool-side file changes.
-- Re-read every existing target file immediately before constructing the final patch. Use the exact current content rather than remembered, inferred, previous-commit or prompt-supplied content.
-- Existing-file modification hunks must contain sufficient exact unchanged context. A plan-checkbox hunk must include its task heading and neighboring lines rather than only the checkbox line.
-- Sole validation exception: for every non-empty patch, feed the exact final textual unified diff to \`git apply --check\` in this read-only snapshot. The checked text must be the exact patch that will be returned. If the check fails, correct the patch text and check it again; after a successful check, do not edit the patch.
-- Do not use \`--recount\`, \`git apply\` without \`--check\`, or any command that writes to the snapshot for this check. This exception never permits edits, writes, mutating Git commands, or write-producing tests.
-- Your final response must be one plain JSON object, not markdown. Required fields are patch and signal. Optional fields are version, summary, and overview. No other fields are allowed.
-- patch must be an empty string or a standard textual git unified diff beginning with diff --git lines.
-- Never emit Apply-Patch markers (*** Begin Patch, *** Add File:, *** Update File:, *** Delete File:, or *** End Patch). Every file block needs diff --git; before responding, scan the entire patch for these markers and rewrite the complete patch if any appear.
-- signal must be one of: empty string, <<<RALPHEX:ALL_TASKS_DONE>>>, <<<RALPHEX:REVIEW_DONE>>>, or <<<RALPHEX:TASK_FAILED>>> as allowed for the current phase.
-- Use only same-path file additions, deletions, and modifications. Do not emit renames, copies, binary patches, symlinks, submodules, quoted paths, or paths containing whitespace.
-- Every changed path must be permitted by the active plan. For task work, include the plan checkbox update in the patch.
-- The trusted host validates allowed paths, runs git apply --check against the real project, applies the diff, runs all focused and repository-wide validation commands, and creates the local commit.
-- Do not mark a task checkbox complete unless the returned patch covers every requirement and required test category for that task. Tests must be authored in the patch even though they cannot be executed inside the read-only model snapshot.
+- Your final response for a non-empty successful result must be exactly one plain JSON object, with no Markdown, prose, code fence, or trailing material.
+- That object must be Builder Envelope v2: {"version":2,"operations":[...]}. Its only top-level fields are version and operations.
+- Each operation must be either {"type":"create_file","path":"...","content":"...","expected_absent":true} or {"type":"replace_exact","path":"...","expected_file_sha256":"...","old_text":"...","new_text":"...","expected_occurrences":1}.
+- Do not author a Git diff, hunk headers, Apply-Patch markers, or any patch text. Do not run git apply, including git apply --check; the host materializes operations and generates the canonical diff.
+- Re-read every existing replacement target immediately before constructing its expected_file_sha256, old_text, and new_text. The expected_file_sha256 is the lowercase SHA-256 of the complete current UTF-8 file content; old_text must occur exactly once.
+- Every changed path must be permitted by the active plan. For task work, include the canonical plan checkbox change as a replace_exact operation.
+- Do not mark a task checkbox complete unless the operations cover every requirement and required test category for that task. Tests must be authored as create_file or replace_exact operations even though they cannot be executed inside the read-only model snapshot.
 - ${phaseSignal}
-- Use TASK_FAILED only when the task cannot be completed safely after read-only inspection; TASK_FAILED requires an empty patch.
+- Use TASK_FAILED only when the task cannot be completed safely after read-only inspection; when doing so, return exactly <<<RALPHEX:TASK_FAILED>>> with no JSON payload.
 - Never use TASK_FAILED solely because the snapshot is read-only, because files cannot be created there, or because write-producing tests cannot be run there.
 - Current phase: ${phase}.`;
 }
@@ -201,7 +197,7 @@ try {
 
   const internalReview = prompt.includes("<<<RALPHEX:REVIEW_DONE>>>");
   const phase = internalReview ? "review" : "task";
-  prompt = `${structuredPatchGuidance(phase)}\n\n${reviewGuidance(internalReview)}${prompt}`;
+  prompt = `${builderEnvelopeV2Guidance(phase)}\n\n${reviewGuidance(internalReview)}${prompt}`;
   snapshot = createBuilderSnapshot();
 
   const launch = prepareProfileLaunch("builder", {
@@ -292,36 +288,34 @@ try {
 
   const snapshotPatch = captureBuilderSnapshotPatch({ snapshot });
   if (snapshotPatch.trim()) fail("Read-only Codex builder modified the isolated snapshot");
-  const envelope = parseEnvelopeMessages(agentMessages, phase, snapshotPatch);
+  const envelope = parseOperationMessages(agentMessages, phase);
   let supervised = { committed: false };
   let effectivePatch = "";
   if (envelope.signal !== "<<<RALPHEX:TASK_FAILED>>>") {
-    effectivePatch = envelope.patch;
     const runDirectory = process.env.CODEXLOOPER_RUN_DIR;
-    const patchArtifact =
+    const payloadArtifact =
       typeof runDirectory === "string" && runDirectory
         ? resolve(
             runDirectory,
-            `builder-patch-${Date.now()}-${process.pid}.diff`,
+            `builder-envelope-${Date.now()}-${process.pid}.json`,
           )
         : null;
 
-    if (patchArtifact && effectivePatch.trim()) {
-      writeFileSync(patchArtifact, effectivePatch, {
+    if (payloadArtifact && envelope.raw_payload) {
+      writeFileSync(payloadArtifact, envelope.raw_payload, {
         encoding: "utf8",
         mode: 0o600,
         flag: "wx",
       });
     }
 
-    supervised = effectivePatch.trim()
-      ? applyBuilderPatch({ patch: effectivePatch, phase })
-      : envelope.legacy_worktree
-        ? superviseBuilderChanges({ phase })
-        : { committed: false };
+    supervised = envelope.operations
+      ? applyBuilderOperations({ envelope: envelope.operations, phase })
+      : { committed: false };
+    effectivePatch = supervised.canonical_diff || "";
 
-    if (patchArtifact && supervised.committed) {
-      rmSync(patchArtifact, { force: true });
+    if (payloadArtifact && supervised.committed) {
+      rmSync(payloadArtifact, { force: true });
     }
   }
   const signal = hostSignal({

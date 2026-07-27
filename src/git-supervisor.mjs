@@ -8,6 +8,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -16,6 +17,10 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { assertGitAuthorityFromEnvironment } from "./git-authority.mjs";
 import { pathAllowed, validationInvocation } from "./run-policy.mjs";
 import { assertManifestExternalTool, verifyRuntimeManifest } from "./runtime-integrity.mjs";
+import {
+  materializeBuilderOperations,
+  validateBuilderOperationEnvelope,
+} from "./builder-operations.mjs";
 
 const SAFE_ENV_KEYS = [
   "HOME",
@@ -382,13 +387,13 @@ function prepareCompletionCandidate({ root, patch, declared, policy, sourceEnv }
     if (run("/usr/bin/git", ["status", "--porcelain=v1"], { cwd: candidate, env, label: "Completion candidate clean checkout" })) {
       fail("CODEXLOOPER_COMPLETION_CANDIDATE_DIRTY", "Candidate repository is not clean after checkout");
     }
-    run("/usr/bin/git", ["apply", "--check", "--recount", "--whitespace=error-all", "-"], {
+    run("/usr/bin/git", ["apply", "--check", "--whitespace=error-all", "-"], {
       cwd: candidate,
       env,
       label: "Completion candidate patch check",
       input: patch,
     });
-    run("/usr/bin/git", ["apply", "--recount", "--whitespace=error-all", "-"], {
+    run("/usr/bin/git", ["apply", "--whitespace=error-all", "-"], {
       cwd: candidate,
       env,
       label: "Completion candidate patch apply",
@@ -765,12 +770,150 @@ function cleanupAppliedPatch(root, paths, sourceEnv) {
   authority(root, sourceEnv, "After host patch rollback");
 }
 
+function candidateOperationPath(candidate, path) {
+  const target = resolve(candidate, path);
+  const candidateRelative = relative(candidate, target);
+  if (!candidateRelative || candidateRelative.startsWith("..") || isAbsolute(candidateRelative)) {
+    fail("CODEXLOOPER_BUILDER_OPERATION_CANDIDATE_INVALID", "Builder operation path escapes the private candidate");
+  }
+  let current = candidate;
+  for (const component of path.split("/")) {
+    current = resolve(current, component);
+    try {
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink()) {
+        fail("CODEXLOOPER_BUILDER_OPERATION_CANDIDATE_INVALID", "Builder operation path traverses a candidate symlink");
+      }
+      if (current !== target && !stat.isDirectory()) {
+        fail("CODEXLOOPER_BUILDER_OPERATION_CANDIDATE_INVALID", "Builder operation path has a non-directory parent");
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  return target;
+}
+
+function operationBaseline(candidate, operations) {
+  const baseline = Object.create(null);
+  for (const operation of operations) {
+    const target = candidateOperationPath(candidate, operation.path);
+    try {
+      const stat = lstatSync(target);
+      if (!stat.isFile()) {
+        fail("CODEXLOOPER_BUILDER_OPERATION_CANDIDATE_INVALID", "Builder operation target must be a regular candidate file");
+      }
+      const bytes = readFileSync(target);
+      const content = bytes.toString("utf8");
+      if (!Buffer.from(content, "utf8").equals(bytes)) {
+        fail("CODEXLOOPER_BUILDER_OPERATION_CANDIDATE_INVALID", "Builder operation baseline must be valid UTF-8 text");
+      }
+      baseline[operation.path] = content;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  return baseline;
+}
+
+function materializeBuilderOperationsCandidate({ root, operations, declared, policy, sourceEnv }) {
+  const start = run("/usr/bin/git", ["rev-parse", "HEAD"], {
+    cwd: root,
+    env: safeEnvironment(sourceEnv),
+    label: "Builder operation candidate start HEAD",
+  });
+  const temporary = candidateRoot();
+  const candidate = resolve(temporary, "repository");
+  let failure = null;
+  try {
+    const env = isolatedCandidateEnvironment(temporary);
+    run("/usr/bin/git", ["clone", "--no-local", "--no-checkout", "--", root, candidate], {
+      cwd: temporary,
+      env,
+      label: "Builder operation candidate local clone",
+      timeout: VALIDATION_TIMEOUT_MS,
+    });
+    chmodSync(candidate, 0o700);
+    if (realpathSync(candidate) !== candidate || lstatSync(candidate).isSymbolicLink()) {
+      fail("CODEXLOOPER_BUILDER_OPERATION_CANDIDATE_INVALID", "Builder operation candidate must stay inside its private root");
+    }
+    run("/usr/bin/git", ["remote", "remove", "origin"], {
+      cwd: candidate,
+      env,
+      label: "Builder operation candidate remote removal",
+    });
+    run("/usr/bin/git", ["config", "--local", "core.hooksPath", "/dev/null"], {
+      cwd: candidate,
+      env,
+      label: "Builder operation candidate hook isolation",
+    });
+    run("/usr/bin/git", ["checkout", "--detach", start], {
+      cwd: candidate,
+      env,
+      label: "Builder operation candidate checkout",
+    });
+    if (run("/usr/bin/git", ["rev-parse", "HEAD"], { cwd: candidate, env, label: "Builder operation candidate HEAD" }) !== start) {
+      fail("CODEXLOOPER_BUILDER_OPERATION_CANDIDATE_INVALID", "Builder operation candidate did not check out the expected HEAD");
+    }
+    if (run("/usr/bin/git", ["status", "--porcelain=v1"], { cwd: candidate, env, label: "Builder operation candidate clean checkout" })) {
+      fail("CODEXLOOPER_BUILDER_OPERATION_CANDIDATE_DIRTY", "Builder operation candidate is not clean after checkout");
+    }
+    const materialized = materializeBuilderOperations(operationBaseline(candidate, operations), {
+      version: 2,
+      operations,
+    });
+    if (!samePaths(materialized.changed_paths, declared)) {
+      fail("CODEXLOOPER_BUILDER_OPERATION_CANDIDATE_INVALID", "Materialized builder operation paths do not match the validated envelope");
+    }
+    for (const path of materialized.changed_paths) {
+      const target = candidateOperationPath(candidate, path);
+      mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+      writeFileSync(target, materialized.files.get(path), { encoding: "utf8", mode: 0o600, flag: "w" });
+    }
+    const actual = changedPaths(candidate, env);
+    if (!samePaths(actual, declared)) {
+      fail("CODEXLOOPER_PATCH_PATH_MISMATCH", "Materialized candidate paths do not match the validated envelope");
+    }
+    validatePaths(actual, policy.allowed_paths);
+    run("/usr/bin/git", ["add", "--intent-to-add", "--", ...actual], {
+      cwd: candidate,
+      env,
+      label: "Builder operation candidate intent-to-add",
+    });
+    const canonical = run("/usr/bin/git", ["diff", "--no-ext-diff", "--binary", "--"], {
+      cwd: candidate,
+      env,
+      label: "Builder operation canonical diff generation",
+    });
+    if (!canonical) {
+      fail("CODEXLOOPER_BUILDER_OPERATION_CANDIDATE_INVALID", "Builder operations produced no canonical diff");
+    }
+    const canonicalPatch = `${canonical}\n`;
+    assertCompleteUnifiedDiff(canonicalPatch);
+    const canonicalPaths = declaredPatchPaths(canonicalPatch);
+    if (!samePaths(canonicalPaths, declared)) {
+      fail("CODEXLOOPER_PATCH_PATH_MISMATCH", "Host-generated canonical diff paths do not match the validated envelope");
+    }
+    return canonicalPatch;
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    try {
+      removeCandidateRoot(temporary);
+    } catch (error) {
+      if (!failure) fail("CODEXLOOPER_BUILDER_OPERATION_CANDIDATE_CLEANUP_FAILED", error.message);
+    }
+  }
+}
+
 export function applyBuilderPatch({
   patch,
   phase,
   sourceEnv = process.env,
   projectRoot = process.cwd(),
   now = () => new Date(),
+  transport = "structured_patch",
 } = {}) {
   if (phase !== "task" && phase !== "review") {
     fail("CODEXLOOPER_SUPERVISOR_PHASE_INVALID", "Supervisor phase must be task or review");
@@ -787,7 +930,7 @@ export function applyBuilderPatch({
   validatePaths(declared, policy.allowed_paths);
   assertCompleteUnifiedDiff(normalizedPatch);
   authority(root, sourceEnv, "Before structured patch check");
-  run("/usr/bin/git", ["apply", "--check", "--recount", "--whitespace=error-all", "-"], {
+  run("/usr/bin/git", ["apply", "--check", "--whitespace=error-all", "-"], {
     cwd: root,
     env: safeEnvironment(sourceEnv),
     label: "Host patch check",
@@ -805,7 +948,7 @@ export function applyBuilderPatch({
   let applied = false;
   try {
     authority(root, sourceEnv, "Before structured patch apply");
-    run("/usr/bin/git", ["apply", "--recount", "--whitespace=error-all", "-"], {
+    run("/usr/bin/git", ["apply", "--whitespace=error-all", "-"], {
       cwd: root,
       env: safeEnvironment(sourceEnv),
       label: "Host patch apply",
@@ -829,13 +972,50 @@ export function applyBuilderPatch({
       phase,
       sourceEnv,
       now,
-      transport: "structured_patch",
+      transport,
       completionCandidate,
     });
   } catch (error) {
     if (applied && changedPaths(root).length > 0) cleanupAppliedPatch(root, declared, sourceEnv);
     throw error;
   }
+}
+
+export function applyBuilderOperations({
+  envelope,
+  phase,
+  sourceEnv = process.env,
+  projectRoot = process.cwd(),
+  now = () => new Date(),
+} = {}) {
+  if (phase !== "task" && phase !== "review") {
+    fail("CODEXLOOPER_SUPERVISOR_PHASE_INVALID", "Supervisor phase must be task or review");
+  }
+  const root = realpathSync(projectRoot);
+  authority(root, sourceEnv, "Before Builder Envelope v2 inspection");
+  if (changedPaths(root).length > 0) {
+    fail("CODEXLOOPER_PATCH_DIRTY", "Builder Envelope v2 application requires a clean worktree");
+  }
+  const validated = validateBuilderOperationEnvelope(envelope);
+  const { policy } = loadPolicy(sourceEnv, root);
+  const declared = validated.operations.map((operation) => operation.path).sort();
+  validatePaths(declared, policy.allowed_paths);
+  const canonicalDiff = materializeBuilderOperationsCandidate({
+    root,
+    operations: validated.operations,
+    declared,
+    policy,
+    sourceEnv,
+  });
+  const result = applyBuilderPatch({
+    patch: canonicalDiff,
+    phase,
+    sourceEnv,
+    projectRoot: root,
+    now,
+    transport: "builder_envelope_v2_host_generated_diff",
+  });
+  return { ...result, canonical_diff: canonicalDiff };
 }
 
 export function superviseBuilderChanges({
