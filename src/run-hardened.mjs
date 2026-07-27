@@ -16,7 +16,12 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path
 import { runPreflight } from "../scripts/preflight.mjs";
 import { assertGitAuthority, readGitAuthority } from "./git-authority.mjs";
 import { ensurePrivateDirectoryChain } from "./runtime-paths.mjs";
-import { parseBudgetLimits, initializeRunBudget, readRunBudget } from "./run-budget.mjs";
+import {
+  parseBudgetLimits,
+  initializeRunBudget,
+  readRunBudget,
+  recordActualEstimatedCost,
+} from "./run-budget.mjs";
 import { parseRunPolicy } from "./run-policy.mjs";
 import { assertManifestExternalTool, verifyRuntimeManifest } from "./runtime-integrity.mjs";
 import { aggregateUsage, readUsageEvents } from "./telemetry.mjs";
@@ -125,6 +130,29 @@ function runId(now, randomBytesImpl) {
 
 function sha256(content) {
   return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+function pinnedProjectCheck(projectRoot) {
+  const packagePath = resolve(projectRoot, "package.json");
+  const stat = lstatSync(packagePath);
+  if (stat.isSymbolicLink() || !stat.isFile() || realpathSync(packagePath) !== packagePath) {
+    fail("CODEXLOOPER_PROJECT_CHECK_INVALID", "package.json must be a canonical regular file");
+  }
+  const content = readFileSync(packagePath, "utf8");
+  let manifest;
+  try {
+    manifest = JSON.parse(content);
+  } catch {
+    fail("CODEXLOOPER_PROJECT_CHECK_INVALID", "package.json must be valid JSON");
+  }
+  const checkScript = manifest?.scripts?.check;
+  if (typeof checkScript !== "string" || !checkScript || checkScript.includes("\0")) {
+    fail("CODEXLOOPER_PROJECT_CHECK_INVALID", "package.json must define a non-empty scripts.check command");
+  }
+  return {
+    package_json_sha256: sha256(content),
+    check_script: checkScript,
+  };
 }
 
 export function parseRunInvocation(argv) {
@@ -502,6 +530,7 @@ export async function runProject({
   const plan = validatePlan(projectRoot, invocation.planPath);
   const singleTask = invocation.taskNumber === null ? null : deriveSingleTaskPlan(plan, invocation.taskNumber);
   const policy = parseRunPolicy(plan.relative, plan.content);
+  policy.full_project_check = pinnedProjectCheck(projectRoot);
   ensureCleanTrackedPlan(projectRoot, plan.relative, env);
 
   const initialAuthority = readGitAuthority(projectRoot, env);
@@ -753,7 +782,12 @@ export async function runProject({
     receipt.usage = aggregateUsage(usageEvents);
     receipt.checks.builder_usage_present = (receipt.usage.profiles.builder?.calls || 0) > 0;
     receipt.checks.reviewer_usage_present = (receipt.usage.profiles.reviewer?.calls || 0) > 0;
-    receipt.budgets.state = readRunBudget({ budgetPath: budget.statePath, projectRoot });
+    receipt.budgets.state = selectedTaskCompletion
+      ? recordActualEstimatedCost(receipt.usage.totals.estimated_cost_usd, {
+        sourceEnv: { ...env, CODEXLOOPER_BUDGET_PATH: budget.statePath },
+        projectRoot,
+      })
+      : readRunBudget({ budgetPath: budget.statePath, projectRoot });
 
     const failures = [];
     if (!receipt.checks.clean_after) failures.push("Worktree is dirty after the run");
@@ -764,6 +798,9 @@ export async function runProject({
     if (!receipt.checks.builder_usage_present) failures.push("No Terra usage event was recorded");
     if (!selectedTaskCompletion && !receipt.checks.reviewer_usage_present) {
       failures.push("No Sol usage event was recorded");
+    }
+    if (Math.abs(receipt.budgets.state.actual_estimated_cost_usd - receipt.usage.totals.estimated_cost_usd) > 1e-9) {
+      failures.push("Recorded usage cost was not reconciled into the run budget");
     }
     if (!receipt.checks.branch_locked) failures.push("Authorized branch was not preserved");
     if (!receipt.checks.ancestry_monotonic) failures.push("Git ancestry was not monotonic");

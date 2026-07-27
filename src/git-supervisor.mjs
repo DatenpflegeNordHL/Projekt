@@ -245,6 +245,56 @@ function runtimeNpmCli(sourceEnv) {
   return assertManifestExternalTool(runtime.manifest, "npm_cli", npmCli);
 }
 
+function pinnedProjectCheck(policy) {
+  const check = policy.full_project_check;
+  if (
+    !check ||
+    typeof check !== "object" ||
+    Array.isArray(check) ||
+    !/^[a-f0-9]{64}$/.test(check.package_json_sha256 || "") ||
+    typeof check.check_script !== "string" ||
+    !check.check_script ||
+    check.check_script.includes("\0")
+  ) {
+    fail("CODEXLOOPER_PROJECT_CHECK_INVALID", "Run policy is missing an immutable package scripts.check binding");
+  }
+  return check;
+}
+
+function runFullProjectCandidateCheck(projectRoot, policy, sourceEnv, environment) {
+  const npmCli = runtimeNpmCli(sourceEnv);
+  if (!npmCli) return null;
+  const pinned = pinnedProjectCheck(policy);
+  const packagePath = resolve(projectRoot, "package.json");
+  const stat = lstatSync(packagePath);
+  if (stat.isSymbolicLink() || !stat.isFile() || realpathSync(packagePath) !== packagePath) {
+    fail("CODEXLOOPER_PROJECT_CHECK_INVALID", "Candidate package.json must be a canonical regular file");
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(packagePath, "utf8"));
+  } catch {
+    fail("CODEXLOOPER_PROJECT_CHECK_INVALID", "Candidate package.json must be valid JSON");
+  }
+  if (manifest?.scripts?.check !== pinned.check_script) {
+    fail("CODEXLOOPER_PROJECT_CHECK_CHANGED", "Candidate changed the run-start package scripts.check command");
+  }
+  const started = Date.now();
+  run(process.execPath, [npmCli, "run", "check"], {
+    cwd: projectRoot,
+    env: environment,
+    label: "Candidate full-project npm run check",
+    timeout: VALIDATION_TIMEOUT_MS,
+  });
+  return {
+    command: "npm run check",
+    executable: npmCli,
+    package_json_sha256: pinned.package_json_sha256,
+    duration_ms: Math.max(0, Date.now() - started),
+    status: "PASS",
+  };
+}
+
 function completedTaskLabels(diff) {
   const unchecked = new Set();
   const checked = new Set();
@@ -343,7 +393,7 @@ function patchTaskCompletions(patch, plan) {
   return completedTaskLabels(section.join("\n"));
 }
 
-function prepareCompletionCandidate({ root, patch, declared, policy, sourceEnv }) {
+function prepareCompletionCandidate({ root, patch, declared, policy, sourceEnv, requireTaskCompletion }) {
   const start = run("/usr/bin/git", ["rev-parse", "HEAD"], {
     cwd: root,
     env: safeEnvironment(sourceEnv),
@@ -405,11 +455,13 @@ function prepareCompletionCandidate({ root, patch, declared, policy, sourceEnv }
     }
     validatePaths(actual, policy.allowed_paths);
     const tasks = pendingTaskCompletion(candidate, policy.plan, env);
-    if (tasks.length === 0) {
+    if (requireTaskCompletion && tasks.length === 0) {
       fail("CODEXLOOPER_COMPLETION_CANDIDATE_INVALID", "Candidate patch did not complete the declared task checkbox");
     }
     const validation = runValidationCommands(candidate, policy.validation_commands, policy.allowed_paths, env);
     const checks = validation.map((entry) => ({ ...entry, gate: "plan_validation" }));
+    const fullProjectCheck = runFullProjectCandidateCheck(candidate, policy, sourceEnv, env);
+    if (fullProjectCheck) checks.push({ ...fullProjectCheck, gate: "full_project_check" });
     run("/usr/bin/git", ["add", "--all", "--", ...actual], {
       cwd: candidate,
       env,
@@ -436,6 +488,7 @@ function prepareCompletionCandidate({ root, patch, declared, policy, sourceEnv }
       candidate_tree: candidateTree(candidate, env),
       tasks,
       validation,
+      full_project_check: fullProjectCheck,
       checks,
       cleanup: "PENDING",
     };
@@ -936,13 +989,15 @@ export function applyBuilderPatch({
     label: "Host patch check",
     input: normalizedPatch,
   });
-  const completionCandidate = phase === "task" && patchTaskCompletions(normalizedPatch, policy.plan).length > 0
+  const requireTaskCompletion = phase === "task" && patchTaskCompletions(normalizedPatch, policy.plan).length > 0;
+  const completionCandidate = requireTaskCompletion || runtimeNpmCli(sourceEnv)
     ? prepareCompletionCandidate({
       root,
       patch: normalizedPatch,
       declared,
       policy,
       sourceEnv,
+      requireTaskCompletion,
     })
     : null;
   let applied = false;

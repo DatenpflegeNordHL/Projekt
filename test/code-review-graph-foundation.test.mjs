@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, chmodSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -15,7 +15,7 @@ import {
 } from "../src/code-review-graph.mjs";
 
 function fixture() {
-  const root = mkdtempSync(resolve(tmpdir(), "codexlooper-crg-foundation-"));
+  const root = realpathSync(mkdtempSync(resolve(tmpdir(), "codexlooper-crg-foundation-")));
   const project = resolve(root, "project");
   const run = resolve(root, "run");
   const environment = resolve(root, "environment");

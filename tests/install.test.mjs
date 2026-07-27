@@ -42,6 +42,8 @@ function createFixture(
     taskCount = 1,
     repeatBuilderAfterCommit = false,
     canonicalTaskCompletion = true,
+    candidateCheck = "node --check check.mjs",
+    candidateCheckReplacement = null,
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "codexlooper-fixture-"));
@@ -56,7 +58,7 @@ function createFixture(
   writeFileSync(join(project, "ROUTER.md"), "# Router\n");
   writeFileSync(
     join(project, "package.json"),
-    `${JSON.stringify({ private: true, scripts: { check: "node --check check.mjs" } })}\n`,
+    `${JSON.stringify({ private: true, scripts: { check: candidateCheck } })}\n`,
   );
   writeFileSync(join(project, "check.mjs"), "export const fixtureCheck = true;\n");
   const extraTasks = Array.from({ length: taskCount - 1 }, (_, index) => {
@@ -65,7 +67,7 @@ function createFixture(
   }).join("");
   writeFileSync(
     join(project, "docs", "plans", "fixture.md"),
-    `# Plan: Fixture\n\n## Allowed paths\n- \`result.txt\`\n- \`this plan file\`\n\n## Validation Commands\n- \`test -f docs/plans/fixture.md\`\n\n### Task 1: Result\n- [ ] Create result.txt\n- [ ] Task 1 complete.\n${extraTasks}`,
+    `# Plan: Fixture\n\n## Allowed paths\n- \`result.txt\`\n${candidateCheckReplacement ? "- `package.json`\\n" : ""}- \`this plan file\`\n\n## Validation Commands\n- \`test -f docs/plans/fixture.md\`\n\n### Task 1: Result\n- [ ] Create result.txt\n- [ ] Task 1 complete.\n${extraTasks}`,
   );
 
   const fakeCodexSource = join(tools, "fake-codex.mjs");
@@ -110,6 +112,14 @@ ${canonicalTaskCompletion ? `      {
         expected_file_sha256: createHash("sha256").update(plan, "utf8").digest("hex"),
         old_text: oldText,
         new_text: newText,
+        expected_occurrences: 1,
+      },` : ""}
+${candidateCheckReplacement ? `      {
+        type: "replace_exact",
+        path: "package.json",
+        expected_file_sha256: createHash("sha256").update(readFileSync("package.json", "utf8"), "utf8").digest("hex"),
+        old_text: ${JSON.stringify(candidateCheck)},
+        new_text: ${JSON.stringify(candidateCheckReplacement)},
         expected_occurrences: 1,
       },` : ""}
     ],
@@ -469,7 +479,9 @@ test("generated runner preserves branch, enforces budgets and archives plan thro
     assert.match(hostEvents, /"transport":"builder_envelope_v2_host_generated_diff"/);
     assert.match(hostEvents, /"completion_gates":\{"required":true/);
     assert.match(hostEvents, /"gate":"plan_validation"/);
-    assert.doesNotMatch(hostEvents, /"command":"npm run check"|"command":"runtime-integrity verification"/);
+    assert.match(hostEvents, /"command":"npm run check"/);
+    assert.match(hostEvents, /"gate":"full_project_check"/);
+    assert.doesNotMatch(hostEvents, /"command":"runtime-integrity verification"/);
     assert.match(hostEvents, /"command":"branch-lock and ancestry verification","status":"PASS"/);
     assert.match(hostEvents, /"command":"clean-worktree verification","status":"PASS"/);
     assert.match(hostEvents, /"transport":"host_plan_archive"/);
@@ -575,7 +587,66 @@ test("selected-task completion stops a stale derived-plan loop after one trusted
     assert.equal(receipt.commits_created, 1);
     assert.equal(receipt.checks.plan_completed, true);
     assert.equal(receipt.ralphex_exit_code, 0);
+    assert.equal(
+      receipt.budgets.state.actual_estimated_cost_usd,
+      receipt.usage.totals.estimated_cost_usd,
+    );
     assert.equal(git(fixture.project, ["status", "--porcelain=v1"]), "");
+  } finally {
+    removeTree(fixture.root);
+  }
+});
+
+test("a failing pinned full-project candidate check creates no host commit", () => {
+  const fixture = createFixture(
+    "0.130.0",
+    "1.6.0",
+    "0.6.3",
+    { candidateCheck: "node -e process.exit(17)" },
+  );
+  try {
+    const result = installFixture(fixture);
+    const start = git(fixture.project, ["rev-parse", "HEAD"]);
+    const run = spawnSync(result.runCommand, ["--task", "1", "docs/plans/fixture.md"], {
+      cwd: fixture.project,
+      encoding: "utf8",
+      env: modelEnv(),
+      timeout: 120_000,
+    });
+    assert.notEqual(run.status, 0);
+    assert.equal(git(fixture.project, ["rev-parse", "HEAD"]), start);
+    assert.equal(git(fixture.project, ["status", "--porcelain=v1"]), "");
+    assert.equal(existsSync(join(fixture.project, "result.txt")), false);
+    assert.match(readFileSync(join(fixture.project, "docs", "plans", "fixture.md"), "utf8"), /- \[ \] Task 1 complete\./);
+    const runDirectory = onlyRunDirectory(fixture.project);
+    assert.equal(existsSync(join(runDirectory, "host-commits.jsonl")), false);
+  } finally {
+    removeTree(fixture.root);
+  }
+});
+
+test("a candidate cannot replace the run-start scripts.check command", () => {
+  const fixture = createFixture(
+    "0.130.0",
+    "1.6.0",
+    "0.6.3",
+    { candidateCheckReplacement: "node -e process.exit(0)" },
+  );
+  try {
+    const result = installFixture(fixture);
+    const start = git(fixture.project, ["rev-parse", "HEAD"]);
+    const run = spawnSync(result.runCommand, ["--task", "1", "docs/plans/fixture.md"], {
+      cwd: fixture.project,
+      encoding: "utf8",
+      env: modelEnv(),
+      timeout: 120_000,
+    });
+    assert.notEqual(run.status, 0);
+    assert.equal(git(fixture.project, ["rev-parse", "HEAD"]), start);
+    assert.equal(git(fixture.project, ["status", "--porcelain=v1"]), "");
+    assert.match(readFileSync(join(fixture.project, "package.json"), "utf8"), /node --check check\.mjs/);
+    const runDirectory = onlyRunDirectory(fixture.project);
+    assert.equal(existsSync(join(runDirectory, "host-commits.jsonl")), false);
   } finally {
     removeTree(fixture.root);
   }
