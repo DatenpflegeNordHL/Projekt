@@ -37,7 +37,12 @@ function createFixture(
   codexVersion = "0.130.0",
   ralphexVersion = "1.6.0",
   mexVersion = "0.6.3",
-  { ralphexExitAfterBuilder = false, taskCount = 1 } = {},
+  {
+    ralphexExitAfterBuilder = false,
+    taskCount = 1,
+    repeatBuilderAfterCommit = false,
+    canonicalTaskCompletion = true,
+  } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "codexlooper-fixture-"));
   const project = join(root, "project with spaces");
@@ -85,10 +90,10 @@ if (modelArg.includes("gpt-5.6-sol")) {
 } else if (readFileSync("docs/plans/fixture.md", "utf8").includes("- [ ]")) {
   const plan = readFileSync("docs/plans/fixture.md", "utf8");
   const oldText = singleTask
-    ? "- [ ] Task 1 complete."
+    ? ${canonicalTaskCompletion ? '"- [ ] Task 1 complete."' : '"### Task 1: Result"'}
     : "- [ ] Create result.txt\\n- [ ] Task 1 complete.";
   const newText = singleTask
-    ? "- [x] Task 1 complete."
+    ? ${canonicalTaskCompletion ? '"- [x] Task 1 complete."' : '"### Task 1: Result (attempted)"'}
     : "- [x] Create result.txt\\n- [x] Task 1 complete.";
   text = JSON.stringify({
     version: 2,
@@ -99,14 +104,14 @@ if (modelArg.includes("gpt-5.6-sol")) {
         content: "fixture-pass\\n",
         expected_absent: true,
       },
-      {
+${canonicalTaskCompletion ? `      {
         type: "replace_exact",
         path: "docs/plans/fixture.md",
         expected_file_sha256: createHash("sha256").update(plan, "utf8").digest("hex"),
         old_text: oldText,
         new_text: newText,
         expected_occurrences: 1,
-      },
+      },` : ""}
     ],
   });
 } else {
@@ -145,8 +150,15 @@ if [ "\${1:-}" = "--version" ]; then echo 'ralphex ${ralphexVersion}'; exit 0; f
 printf '%s\n' "\$1" > "\${CODEXLOOPER_RUN_DIR}/ralphex-plan-path"
 terra="$(sed -n 's/^claude_command = //p' .ralphex/config)"
 sol="$(sed -n 's/^custom_review_script = //p' .ralphex/config)"
-printf 'Read the plan file at %s and complete the current task.\n' "\$1" | "$terra" --print --output-format stream-json --verbose --dangerously-skip-permissions
+plan_path="\$1"
+builder_calls="\${CODEXLOOPER_RUN_DIR}/builder-calls"
+run_builder() {
+  printf 'call\n' >> "$builder_calls"
+  printf 'Read the plan file at %s and complete the current task.\n' "$plan_path" | "$terra" --print --output-format stream-json --verbose --dangerously-skip-permissions
+}
+run_builder
 ${ralphexExitAfterBuilder ? "exit 23" : ""}
+${repeatBuilderAfterCommit ? "while :; do sleep 1; run_builder; done" : ""}
 prompt="\${TMPDIR:-/tmp}/ralphex-custom-prompt-$$.txt"
 umask 077
 printf '%s\n' 'Review the committed fixture changes.' > "$prompt"
@@ -522,6 +534,126 @@ test("generated runner exposes only a private selected-task plan to Ralphex", ()
     assert.match(derivedPlan, /## Allowed paths/);
     assert.match(derivedPlan, /## Validation Commands/);
     assert.equal(git(fixture.project, ["status", "--porcelain=v1"]), "");
+  } finally {
+    removeTree(fixture.root);
+  }
+});
+
+test("selected-task completion stops a stale derived-plan loop after one trusted host commit", () => {
+  const fixture = createFixture(
+    "0.130.0",
+    "1.6.0",
+    "0.6.3",
+    { taskCount: 5, repeatBuilderAfterCommit: true },
+  );
+  try {
+    const result = installFixture(fixture);
+    const run = spawnSync(result.runCommand, ["--task", "1", "docs/plans/fixture.md"], {
+      cwd: fixture.project,
+      encoding: "utf8",
+      env: modelEnv(),
+      timeout: 120_000,
+    });
+    assert.equal(run.status, 0, run.stderr);
+    const plan = readFileSync(join(fixture.project, "docs", "plans", "fixture.md"), "utf8");
+    assert.match(plan, /- \[x\] Task 1 complete\./);
+    for (const task of [2, 3, 4, 5]) {
+      assert.match(plan, new RegExp(`- \\[ \\] Task ${task} complete\\.`));
+    }
+    const runDirectory = onlyRunDirectory(fixture.project);
+    assert.deepEqual(
+      readFileSync(join(runDirectory, "builder-calls"), "utf8").trim().split("\n"),
+      ["call"],
+    );
+    const derivedPlanPath = readFileSync(join(runDirectory, "ralphex-plan-path"), "utf8").trim();
+    assert.match(readFileSync(derivedPlanPath, "utf8"), /- \[ \] Task 1 complete\./);
+    assert.equal(statSync(derivedPlanPath).mode & 0o777, 0o400);
+    const receipt = JSON.parse(readFileSync(join(runDirectory, "receipt.json"), "utf8"));
+    assert.equal(receipt.status, "completed");
+    assert.equal(receipt.selected_task, 1);
+    assert.equal(receipt.selected_task_commit, receipt.head_after);
+    assert.equal(receipt.commits_created, 1);
+    assert.equal(receipt.checks.plan_completed, true);
+    assert.equal(receipt.ralphex_exit_code, 0);
+    assert.equal(git(fixture.project, ["status", "--porcelain=v1"]), "");
+  } finally {
+    removeTree(fixture.root);
+  }
+});
+
+test("selected-task canonical completion evidence remains fail-closed", () => {
+  const fixture = createFixture(
+    "0.130.0",
+    "1.6.0",
+    "0.6.3",
+    { taskCount: 2, canonicalTaskCompletion: false },
+  );
+  try {
+    const result = installFixture(fixture);
+    const run = spawnSync(result.runCommand, ["--task", "1", "docs/plans/fixture.md"], {
+      cwd: fixture.project,
+      encoding: "utf8",
+      env: modelEnv(),
+      timeout: 120_000,
+    });
+    assert.notEqual(run.status, 0);
+    const runDirectory = onlyRunDirectory(fixture.project);
+    const receipt = JSON.parse(readFileSync(join(runDirectory, "receipt.json"), "utf8"));
+    assert.equal(receipt.status, "failed");
+    assert.equal(receipt.failure.code, "CODEXLOOPER_SINGLE_TASK_INCOMPLETE");
+    assert.equal(receipt.checks.plan_completed, false);
+    assert.equal(receipt.selected_task_commit, null);
+    assert.match(
+      readFileSync(join(fixture.project, "docs", "plans", "fixture.md"), "utf8"),
+      /- \[ \] Task 1 complete\./,
+    );
+  } finally {
+    removeTree(fixture.root);
+  }
+});
+
+test("full-plan runs still require every canonical task to complete", () => {
+  const fixture = createFixture("0.130.0", "1.6.0", "0.6.3", { taskCount: 2 });
+  try {
+    const result = installFixture(fixture);
+    const run = spawnSync(result.runCommand, ["docs/plans/fixture.md"], {
+      cwd: fixture.project,
+      encoding: "utf8",
+      env: modelEnv(),
+      timeout: 120_000,
+    });
+    assert.notEqual(run.status, 0);
+    const receipt = JSON.parse(readFileSync(join(onlyRunDirectory(fixture.project), "receipt.json"), "utf8"));
+    assert.equal(receipt.status, "failed");
+    assert.equal(receipt.failure.code, "CODEXLOOPER_PLAN_ARCHIVE_INVALID");
+    assert.match(
+      readFileSync(join(fixture.project, "docs", "plans", "fixture.md"), "utf8"),
+      /- \[ \] Task 2 complete\./,
+    );
+  } finally {
+    removeTree(fixture.root);
+  }
+});
+
+test("already-completed selected tasks block before a Builder invocation", () => {
+  const fixture = createFixture();
+  try {
+    const planPath = join(fixture.project, "docs", "plans", "fixture.md");
+    writeFileSync(
+      planPath,
+      readFileSync(planPath, "utf8").replace("- [ ] Task 1 complete.", "- [x] Task 1 complete."),
+    );
+    git(fixture.project, ["add", "docs/plans/fixture.md"]);
+    git(fixture.project, ["commit", "-m", "test: pre-complete task 1"]);
+    const result = installFixture(fixture);
+    const run = spawnSync(result.runCommand, ["--task", "1", "docs/plans/fixture.md"], {
+      cwd: fixture.project,
+      encoding: "utf8",
+      env: modelEnv(),
+    });
+    assert.notEqual(run.status, 0);
+    assert.match(run.stderr, /CODEXLOOPER_SINGLE_TASK_ALREADY_COMPLETED/u);
+    assert.equal(existsSync(join(fixture.project, ".codexlooper", "runs")), false);
   } finally {
     removeTree(fixture.root);
   }

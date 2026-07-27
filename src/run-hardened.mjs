@@ -255,7 +255,7 @@ function ralphexEnvironment(sourceEnv, values) {
   return env;
 }
 
-async function spawnRalphex(command, plan, { cwd, env, timeoutMs }) {
+async function spawnRalphex(command, plan, { cwd, env, timeoutMs, completionCheck = null }) {
   const child = spawn(command, [plan], { cwd, env, stdio: "inherit" });
   const handlers = new Map();
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
@@ -266,31 +266,56 @@ async function spawnRalphex(command, plan, { cwd, env, timeoutMs }) {
     process.on(signal, handler);
   }
   let timedOut = false;
+  let completion = null;
+  let completionError = null;
   const timer = setTimeout(() => {
     timedOut = true;
     if (!child.killed) child.kill("SIGTERM");
   }, timeoutMs);
   timer.unref?.();
+  const checkCompletion = () => {
+    if (!completionCheck || completion || completionError) return;
+    try {
+      const result = completionCheck();
+      if (!result) return;
+      completion = result;
+      if (!child.killed) child.kill("SIGTERM");
+    } catch (error) {
+      completionError = error;
+      if (!child.killed) child.kill("SIGTERM");
+    }
+  };
+  const completionTimer = completionCheck ? setInterval(checkCompletion, 25) : null;
+  completionTimer?.unref?.();
+  checkCompletion();
   try {
-    const exitCode = await new Promise((resolveExit, rejectExit) => {
+    return await new Promise((resolveExit, rejectExit) => {
       child.once("error", rejectExit);
       child.once("exit", (code, signal) => {
+        if (completionError) {
+          rejectExit(completionError);
+          return;
+        }
         if (timedOut) {
           const error = new Error("Run duration budget expired while Ralphex was active");
           error.code = "CODEXLOOPER_BUDGET_DURATION_EXCEEDED";
           rejectExit(error);
           return;
         }
+        if (completion) {
+          resolveExit({ exitCode: 0, completion });
+          return;
+        }
         if (signal) {
           rejectExit(new Error(`Ralphex terminated by ${signal}`));
           return;
         }
-        resolveExit(code ?? 1);
+        resolveExit({ exitCode: code ?? 1, completion: null });
       });
     });
-    return exitCode;
   } finally {
     clearTimeout(timer);
+    if (completionTimer) clearInterval(completionTimer);
     for (const [signal, handler] of handlers) process.off(signal, handler);
   }
 }
@@ -307,6 +332,53 @@ function recordLifecycleCommit(runDirectory, event) {
   const path = resolve(runDirectory, "host-commits.jsonl");
   appendFileSync(path, `${JSON.stringify(event)}\n`, { encoding: "utf8", mode: 0o600 });
   chmodSync(path, 0o600);
+}
+
+function selectedTaskCompletionEvidence({
+  projectRoot,
+  plan,
+  expectedPlanSha256,
+  runDirectory,
+  runId,
+  branch,
+  startSha,
+  sourceEnv,
+}) {
+  if (sha256(readFileSync(plan.absolute, "utf8")) !== expectedPlanSha256) return null;
+  const authority = assertGitAuthority({
+    projectRoot,
+    expectedProjectRoot: projectRoot,
+    expectedBranch: branch,
+    runStartSha: startSha,
+    sourceEnv,
+    label: "Selected-task completion evidence",
+  });
+  if (authority.head === startSha) return null;
+  let raw;
+  try {
+    raw = readFileSync(resolve(runDirectory, "host-commits.jsonl"), "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+  for (const line of raw.split("\n")) {
+    if (!line) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (
+      event?.schema === "codexlooper.host-commit.v3" &&
+      event.phase === "task" &&
+      event.run_id === runId &&
+      event.commit === authority.head
+    ) {
+      return { commit: authority.head };
+    }
+  }
+  return null;
 }
 
 function archiveCompletedPlan({
@@ -472,6 +544,7 @@ export async function runProject({
     ...(singleTask ? {
       single_task: true,
       selected_task: invocation.taskNumber,
+      selected_task_commit: null,
       original_plan: plan.relative,
       original_plan_sha256: singleTask.original_plan_sha256,
       derived_plan: derivedPlanRelative,
@@ -528,6 +601,7 @@ export async function runProject({
     failure: null,
     secret_free: true,
   };
+  let selectedTaskCompletion = null;
   writeReceipt(receiptPath, receipt, secret);
 
   try {
@@ -582,13 +656,29 @@ export async function runProject({
       CODEXLOOPER_RUN_START_SHA: headBefore,
     });
     const remainingMs = Math.max(1, budget.state.deadline_at_ms - Date.now());
-    const exitCode = await spawnRalphex(ralphexCommand, derivedPlanPath || plan.relative, {
+    const ralphexResult = await spawnRalphex(ralphexCommand, derivedPlanPath || plan.relative, {
       cwd: projectRoot,
       env: childEnv,
       timeoutMs: remainingMs,
+      completionCheck: singleTask
+        ? () =>
+          selectedTaskCompletionEvidence({
+            projectRoot,
+            plan,
+            expectedPlanSha256: singleTask.selected_task_completed_plan_sha256,
+            runDirectory,
+            runId: id,
+            branch,
+            startSha: headBefore,
+            sourceEnv: env,
+          })
+        : null,
     });
-    receipt.ralphex_exit_code = exitCode;
-    if (exitCode !== 0) fail("CODEXLOOPER_RALPHEX_FAILED", `Ralphex exited with status ${exitCode}`);
+    receipt.ralphex_exit_code = ralphexResult.exitCode;
+    selectedTaskCompletion = ralphexResult.completion;
+    if (ralphexResult.exitCode !== 0) {
+      fail("CODEXLOOPER_RALPHEX_FAILED", `Ralphex exited with status ${ralphexResult.exitCode}`);
+    }
 
     const afterRalphex = assertGitAuthority({
       projectRoot,
@@ -606,13 +696,24 @@ export async function runProject({
     }
 
     if (singleTask) {
-      const currentPlan = readFileSync(plan.absolute, "utf8");
-      if (sha256(currentPlan) !== singleTask.selected_task_completed_plan_sha256) {
+      const completionEvidence = selectedTaskCompletion || selectedTaskCompletionEvidence({
+        projectRoot,
+        plan,
+        expectedPlanSha256: singleTask.selected_task_completed_plan_sha256,
+        runDirectory,
+        runId: id,
+        branch,
+        startSha: headBefore,
+        sourceEnv: env,
+      });
+      if (!completionEvidence) {
         fail(
           "CODEXLOOPER_SINGLE_TASK_INCOMPLETE",
           `Task ${invocation.taskNumber} did not complete without changing other plan content`,
         );
       }
+      selectedTaskCompletion = completionEvidence;
+      receipt.selected_task_commit = completionEvidence.commit;
     } else {
       archiveCompletedPlan({
         projectRoot,
@@ -636,6 +737,12 @@ export async function runProject({
     receipt.branch_after = finalAuthority.branch;
     receipt.head_after = finalAuthority.head;
     receipt.ancestry_ok = finalAuthority.ancestry_ok;
+    if (singleTask && selectedTaskCompletion?.commit !== finalAuthority.head) {
+      fail(
+        "CODEXLOOPER_SINGLE_TASK_COMPLETION_MISMATCH",
+        "Selected-task completion commit is not the final trusted host result",
+      );
+    }
     receipt.commits_created = countCommits(projectRoot, headBefore, finalAuthority.head, env);
     receipt.checks.clean_after = gitStatus(projectRoot, "Final Git status check", env).length === 0;
     receipt.checks.plan_completed = singleTask
@@ -655,7 +762,9 @@ export async function runProject({
     }
     if (receipt.commits_created < 1) failures.push("No trusted-host commit was created");
     if (!receipt.checks.builder_usage_present) failures.push("No Terra usage event was recorded");
-    if (!receipt.checks.reviewer_usage_present) failures.push("No Sol usage event was recorded");
+    if (!selectedTaskCompletion && !receipt.checks.reviewer_usage_present) {
+      failures.push("No Sol usage event was recorded");
+    }
     if (!receipt.checks.branch_locked) failures.push("Authorized branch was not preserved");
     if (!receipt.checks.ancestry_monotonic) failures.push("Git ancestry was not monotonic");
     if (failures.length > 0) fail("CODEXLOOPER_RUN_INCOMPLETE", failures.join("; "));
