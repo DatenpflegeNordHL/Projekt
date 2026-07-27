@@ -16,6 +16,8 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { parseBuilderOperationEnvelopeV2 } from "../src/builder-envelope.mjs";
+import { validateBuilderOperationEnvelope } from "../src/builder-operations.mjs";
 
 const entrypoint = resolve("bin/terra-as-claude.mjs");
 
@@ -292,6 +294,9 @@ function completingEnvelope(planContent) {
   });
 }
 
+const normativeCreateEnvelope = '{"version":2,"operations":[{"type":"create_file","path":"src/example.mjs","content":"export const example = true;\\n","expected_absent":true}]}';
+const normativeReplaceEnvelope = '{"version":2,"operations":[{"type":"replace_exact","path":"src/example.mjs","expected_file_sha256":"0000000000000000000000000000000000000000000000000000000000000000","old_text":"export const example = true;\\n","new_text":"export const example = false;\\n","expected_occurrences":1}]}';
+
 test("Terra wrapper rejects a successful Codex stream with no agent message", () => {
   const current = fixture();
   try {
@@ -489,6 +494,7 @@ test("retains bounded, redacted private diagnostics for malformed Builder respon
 `;
   const malformedResponses = [
     "{\"version\":2,\"operations\":[}",
+    "{\"version\":2,\"operations\":[{\"type\":\"create_file\",\"path\":\"src/example.mjs\",\"content\":\"line one\nline two\",\"expected_absent\":true}]}",
     "I cannot safely construct an envelope.",
     "```json\n{\"version\":2,\"operations\":[]}\n```",
     "{\"version\":2,\"operations\":[]} trailing",
@@ -522,11 +528,18 @@ test("retains bounded, redacted private diagnostics for malformed Builder respon
 });
 
 test("Terra prompt requires a strict Builder Envelope v2 response without a snapshot patch check", () => {
+  const promptCapturePath = join(tmpdir(), `codexlooper-contract-prompt-${process.pid}-${Date.now()}.txt`);
   const current = fixture({
     agentText: replaceValueEnvelope(),
+    promptCapturePath,
     requiredPromptFragments: [
-      "A response containing changes must be exactly one plain Builder Envelope v2 JSON object",
-      "That object is {\"version\":2,\"operations\":[...]}",
+      "Your first and only substantive response must be exactly one syntactically valid Builder Envelope v2 JSON object",
+      "Every operation discriminator field is exactly type",
+      "A create_file operation has exactly these fields: type, path, content, expected_absent",
+      "A replace_exact operation has exactly these fields: type, path, expected_file_sha256, old_text, new_text, expected_occurrences",
+      "expected_absent is exactly true",
+      "expected_occurrences is exactly 1",
+      "JSON-escape every embedded double quote, backslash, tab, carriage return, and newline",
       "Do not author a Git diff, hunk headers, Apply-Patch markers, or any patch text",
       "Do not run git apply, including git apply --check",
       "Never edit, create, delete, rename, copy, or chmod files",
@@ -542,10 +555,41 @@ test("Terra prompt requires a strict Builder Envelope v2 response without a snap
   try {
     const result = runAdapter(current);
     assert.equal(result.status, 0, result.stderr || result.stdout);
+    const prompt = readFileSync(promptCapturePath, "utf8");
+    assert.match(prompt, /never use kind as an operation field/u);
+    assert.equal(prompt.includes('"kind":'), false);
+    assert.equal(prompt.includes(normativeCreateEnvelope), true);
+    assert.equal(prompt.includes(normativeReplaceEnvelope), true);
+    for (const serialized of [normativeCreateEnvelope, normativeReplaceEnvelope]) {
+      assert.deepEqual(
+        validateBuilderOperationEnvelope(parseBuilderOperationEnvelopeV2(serialized)),
+        validateBuilderOperationEnvelope(JSON.parse(serialized)),
+      );
+    }
+    const wrongAlias = JSON.parse(normativeReplaceEnvelope);
+    wrongAlias.operations[0].kind = wrongAlias.operations[0].type;
+    delete wrongAlias.operations[0].type;
+    assert.throws(
+      () => validateBuilderOperationEnvelope(wrongAlias),
+      (error) => error.code === "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+    );
+    const unknownField = JSON.parse(normativeCreateEnvelope);
+    unknownField.operations[0].extra = true;
+    assert.throws(
+      () => validateBuilderOperationEnvelope(unknownField),
+      (error) => error.code === "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+    );
+    const omittedField = JSON.parse(normativeCreateEnvelope);
+    delete omittedField.operations[0].expected_absent;
+    assert.throws(
+      () => validateBuilderOperationEnvelope(omittedField),
+      (error) => error.code === "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+    );
     assert.deepEqual(payloadArtifacts(current.runDirectory), []);
     assert.equal(readFileSync(join(current.project, "src", "value.mjs"), "utf8"), "export const value = 2;\n");
     assert.equal(git(current.project, ["status", "--porcelain=v1"]), "");
   } finally {
+    rmSync(promptCapturePath, { force: true });
     rmSync(current.project, { recursive: true, force: true });
   }
 });
