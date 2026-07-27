@@ -66,7 +66,8 @@ function createFixture(
   const fakeCodexSource = join(tools, "fake-codex.mjs");
   writeFileSync(
     fakeCodexSource,
-    `import { readFileSync } from "node:fs";
+    `import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 if (process.argv[2] === "--version") {
   console.log("codex-cli ${codexVersion}");
@@ -82,46 +83,34 @@ let text;
 if (modelArg.includes("gpt-5.6-sol")) {
   text = "NO ISSUES FOUND";
 } else if (readFileSync("docs/plans/fixture.md", "utf8").includes("- [ ]")) {
-  const planPatch = singleTask
-    ? [
-      "diff --git a/docs/plans/fixture.md b/docs/plans/fixture.md",
-      "--- a/docs/plans/fixture.md",
-      "+++ b/docs/plans/fixture.md",
-      "@@ -9,7 +9,7 @@",
-      " ",
-      " ### Task 1: Result",
-      " - [ ] Create result.txt",
-      "-- [ ] Task 1 complete.",
-      "+- [x] Task 1 complete.",
-      " ",
-      " ### Task 2: Must not run",
-      " - [ ] Task 2 complete.",
-      "",
-    ]
-    : [
-      "diff --git a/docs/plans/fixture.md b/docs/plans/fixture.md",
-      "--- a/docs/plans/fixture.md",
-      "+++ b/docs/plans/fixture.md",
-      "@@ -10,3 +10,3 @@",
-      " ### Task 1: Result",
-      "-- [ ] Create result.txt",
-      "-- [ ] Task 1 complete.",
-      "+- [x] Create result.txt",
-      "+- [x] Task 1 complete.",
-      "",
-    ];
-  const patch = [
-    "diff --git a/result.txt b/result.txt",
-    "new file mode 100644",
-    "--- /dev/null",
-    "+++ b/result.txt",
-    "@@ -0,0 +1 @@",
-    "+fixture-pass",
-    ...planPatch,
-  ].join("\\n");
-  text = JSON.stringify({ patch, signal: "<<<RALPHEX:ALL_TASKS_DONE>>>", summary: "Completed fixture through trusted host." });
+  const plan = readFileSync("docs/plans/fixture.md", "utf8");
+  const oldText = singleTask
+    ? "- [ ] Task 1 complete."
+    : "- [ ] Create result.txt\\n- [ ] Task 1 complete.";
+  const newText = singleTask
+    ? "- [x] Task 1 complete."
+    : "- [x] Create result.txt\\n- [x] Task 1 complete.";
+  text = JSON.stringify({
+    version: 2,
+    operations: [
+      {
+        type: "create_file",
+        path: "result.txt",
+        content: "fixture-pass\\n",
+        expected_absent: true,
+      },
+      {
+        type: "replace_exact",
+        path: "docs/plans/fixture.md",
+        expected_file_sha256: createHash("sha256").update(plan, "utf8").digest("hex"),
+        old_text: oldText,
+        new_text: newText,
+        expected_occurrences: 1,
+      },
+    ],
+  });
 } else {
-  text = JSON.stringify({ patch: "", signal: "<<<RALPHEX:ALL_TASKS_DONE>>>", summary: "Fixture already complete." });
+  text = "<<<RALPHEX:ALL_TASKS_DONE>>>";
 }
 console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } }));
 console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1000, cached_input_tokens: 400, cache_write_input_tokens: 0, output_tokens: 200, reasoning_output_tokens: 50 } }));
@@ -465,7 +454,7 @@ test("generated runner preserves branch, enforces budgets and archives plan thro
     assert.ok(receipt.usage.totals.estimated_cost_usd > 0);
     assert.doesNotMatch(JSON.stringify(receipt), /closerouter_test_secret|OPENAI_API_KEY|GITHUB_TOKEN/);
     const hostEvents = readFileSync(join(runDirectory, "host-commits.jsonl"), "utf8");
-    assert.match(hostEvents, /"transport":"structured_patch"/);
+    assert.match(hostEvents, /"transport":"builder_envelope_v2_host_generated_diff"/);
     assert.match(hostEvents, /"completion_gates":\{"required":true/);
     assert.match(hostEvents, /"gate":"plan_validation"/);
     assert.doesNotMatch(hostEvents, /"command":"npm run check"|"command":"runtime-integrity verification"/);

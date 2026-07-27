@@ -34,6 +34,7 @@ export const RUNTIME_FILES = Object.freeze([
   "src/git-authority.mjs",
   "src/run-budget.mjs",
   "src/run-policy.mjs",
+  "src/builder-operations.mjs",
   "src/builder-envelope.mjs",
   "src/builder-snapshot.mjs",
   "src/git-supervisor.mjs",
