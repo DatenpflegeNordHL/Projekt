@@ -426,7 +426,7 @@ Build only on Tasks 3 and 4 to add before-and-after repository-state checks and
 focused standalone adapter verification. Do not add host runner plumbing or Sol
 in this task.
 
-- [ ] Task 5 complete.
+- [x] Task 5 complete.
 
 ### Task 6: Original executable plumbing and receipts
 

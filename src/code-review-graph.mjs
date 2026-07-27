@@ -646,7 +646,74 @@ function writePrivateCrgReport({ projectRoot, runDir, operation, stdout, stderr,
   return { report_path: reportPath, truncated: false };
 }
 
-export function executeCrgStandalone({
+function repositoryEntries(root) {
+  const entries = new Map();
+  const visit = (directory) => {
+    for (const name of readdirSync(directory).sort((left, right) => left.localeCompare(right))) {
+      const path = resolve(directory, name);
+      const relativePath = relative(root, path).split(sep).join("/");
+      const stat = lstatSync(path);
+      if (stat.isDirectory()) {
+        entries.set(relativePath, Object.freeze({ type: "directory", mode: stat.mode & 0o777 }));
+        visit(path);
+      } else if (stat.isFile()) {
+        entries.set(relativePath, Object.freeze({
+          type: "file",
+          mode: stat.mode & 0o777,
+          size: stat.size,
+          sha256: foundationSha256(readFileSync(path)),
+        }));
+      } else if (stat.isSymbolicLink()) {
+        entries.set(relativePath, Object.freeze({ type: "symlink", mode: stat.mode & 0o777, link_target: readlinkSync(path) }));
+      } else {
+        foundationFail("CODEXLOOPER_CRG_REPOSITORY_MUTATION", `Repository contains an unsupported entry: ${relativePath}`);
+      }
+    }
+  };
+  visit(root);
+  return entries;
+}
+
+export function captureCrgRepositoryState({ projectRoot, runDir } = {}) {
+  const project = canonicalDirectory(projectRoot, "Project root");
+  const run = canonicalDirectory(runDir, "CRG private run directory");
+  if (!relativeInside(project, run) || !relative(project, run).split(sep).join("/").startsWith(".codexlooper/runs/")) {
+    foundationFail("CODEXLOOPER_CRG_PRIVATE_PATH_INVALID", "CRG private run directory must stay below .codexlooper/runs");
+  }
+  return Object.freeze({
+    project_root: project,
+    run_dir: run,
+    entries: repositoryEntries(project),
+  });
+}
+
+export function verifyCrgRepositoryState(snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || !(snapshot.entries instanceof Map)) {
+    foundationFail("CODEXLOOPER_CRG_REPOSITORY_MUTATION", "CRG repository snapshot is invalid");
+  }
+  const project = canonicalDirectory(snapshot.project_root, "Project root");
+  const run = canonicalDirectory(snapshot.run_dir, "CRG private run directory");
+  if (project !== snapshot.project_root || run !== snapshot.run_dir) {
+    foundationFail("CODEXLOOPER_CRG_REPOSITORY_MUTATION", "CRG repository paths changed after state capture");
+  }
+  const actual = repositoryEntries(project);
+  const reportPath = relative(project, resolve(run, "crg-report.json")).split(sep).join("/");
+  if (!snapshot.entries.has(reportPath)) {
+    const report = actual.get(reportPath);
+    if (report?.type === "file" && report.mode === 0o600) actual.delete(reportPath);
+  }
+  if (actual.size !== snapshot.entries.size) {
+    foundationFail("CODEXLOOPER_CRG_REPOSITORY_MUTATION", "CRG changed repository entries outside private report storage");
+  }
+  for (const [path, expected] of snapshot.entries) {
+    if (JSON.stringify(actual.get(path)) !== JSON.stringify(expected)) {
+      foundationFail("CODEXLOOPER_CRG_REPOSITORY_MUTATION", `CRG changed repository entry: ${path}`);
+    }
+  }
+  return snapshot;
+}
+
+function executeCrgStandaloneUnchecked({
   launch,
   operation,
   projectRoot,
@@ -727,4 +794,26 @@ export function executeCrgStandalone({
     const errorClass = error?.code === "CODEXLOOPER_CRG_PROJECTION_INVALID" ? "projection_invalid" : "malformed_json";
     return failedExecution(errorClass, duration, { reportPath: report.report_path });
   }
+}
+
+export function executeCrgStandalone(options = {}) {
+  const snapshot = captureCrgRepositoryState(options);
+  let result;
+  try {
+    result = executeCrgStandaloneUnchecked(options);
+  } finally {
+    try {
+      verifyCrgRepositoryState(snapshot);
+    } catch (error) {
+      if (error?.code === "CODEXLOOPER_CRG_REPOSITORY_MUTATION") {
+        result = failedExecution("repository_mutation", result?.duration_ms ?? 0, {
+          reportPath: result?.report_path ?? null,
+          truncated: result?.truncated ?? false,
+        });
+      } else {
+        throw error;
+      }
+    }
+  }
+  return result;
 }
