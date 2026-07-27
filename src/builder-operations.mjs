@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { types as utilTypes } from "node:util";
 
 export const BUILDER_OPERATION_LIMITS = Object.freeze({
   max_envelope_bytes: 2_000_000,
@@ -6,7 +7,7 @@ export const BUILDER_OPERATION_LIMITS = Object.freeze({
   max_path_bytes: 1_024,
   max_content_bytes: 1_000_000,
   max_baseline_files: 10_000,
-  max_baseline_bytes: 64_000_000,
+  max_baseline_bytes: 16_000_000,
 });
 
 const ENVELOPE_FIELDS = Object.freeze(["operations", "version"]);
@@ -21,6 +22,23 @@ const REPLACE_EXACT_FIELDS = Object.freeze([
 ]);
 const SHA256 = /^[0-9a-f]{64}$/u;
 const PATH_CONTROL = /[\u0000-\u001f\u007f]/u;
+const PROTOTYPE_SENSITIVE_COMPONENTS = new Set([
+  "__defineGetter__",
+  "__defineSetter__",
+  "__lookupGetter__",
+  "__lookupSetter__",
+  "__proto__",
+  "constructor",
+  "hasOwnProperty",
+  "isPrototypeOf",
+  "propertyIsEnumerable",
+  "prototype",
+  "toLocaleString",
+  "toString",
+  "valueOf",
+]);
+const ENVELOPE_PREFIX_BYTES = Buffer.byteLength('{"version":2,"operations":[', "utf8");
+const ENVELOPE_SUFFIX_BYTES = Buffer.byteLength("]}", "utf8");
 
 function fail(code, message) {
   const error = new Error(message);
@@ -33,28 +51,118 @@ function byteLength(value) {
 }
 
 function isPlainObject(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (
+    !value ||
+    typeof value !== "object" ||
+    utilTypes.isProxy(value) ||
+    Array.isArray(value)
+  ) {
+    return false;
+  }
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 
-function exactFields(value, expected, label) {
+function snapshotDataObject(value, label) {
   if (!isPlainObject(value)) {
     fail("CODEXLOOPER_BUILDER_OPERATIONS_INVALID", `${label} must be a plain object`);
   }
-  const actual = Object.keys(value).sort();
+  const ownKeys = Reflect.ownKeys(value);
+  if (ownKeys.some((key) => typeof key !== "string")) {
+    fail(
+      "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+      `${label} must contain only ordinary string-keyed data fields`,
+    );
+  }
+  const snapshot = Object.create(null);
+  for (const field of ownKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, field);
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) {
+      fail(
+        "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+        `${label} fields must be enumerable own data properties`,
+      );
+    }
+    snapshot[field] = descriptor.value;
+  }
+  return { fields: snapshot, keys: [...ownKeys].sort() };
+}
+
+function assertExactSnapshot(snapshot, expected, label) {
   if (
-    actual.length !== expected.length ||
-    actual.some((field, index) => field !== expected[index])
+    snapshot.keys.length !== expected.length ||
+    snapshot.keys.some((field, index) => field !== expected[index])
   ) {
     fail(
       "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
       `${label} has unknown or missing fields`,
     );
   }
+  return snapshot.fields;
 }
 
-function safePath(value, label) {
+function snapshotExactDataObject(value, expected, label) {
+  return assertExactSnapshot(snapshotDataObject(value, label), expected, label);
+}
+
+function snapshotDenseOrdinaryArray(value, label) {
+  if (
+    utilTypes.isProxy(value) ||
+    !Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Array.prototype
+  ) {
+    fail(
+      "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+      `${label} must be an ordinary Array`,
+    );
+  }
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (
+    !lengthDescriptor ||
+    !Object.hasOwn(lengthDescriptor, "value") ||
+    !Number.isSafeInteger(lengthDescriptor.value) ||
+    lengthDescriptor.value <= 0 ||
+    lengthDescriptor.value > BUILDER_OPERATION_LIMITS.max_operations
+  ) {
+    fail(
+      "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+      `${label} must contain a bounded non-empty operation list`,
+    );
+  }
+  const length = lengthDescriptor.value;
+  const ownKeys = Reflect.ownKeys(value);
+  if (
+    ownKeys.length !== length + 1 ||
+    ownKeys.some(
+      (key) =>
+        typeof key !== "string" ||
+        (key !== "length" && (!/^(?:0|[1-9]\d*)$/u.test(key) || Number(key) >= length)),
+    )
+  ) {
+    fail(
+      "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+      `${label} must be dense and contain no extra own properties`,
+    );
+  }
+  const snapshot = new Array(length);
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) {
+      fail(
+        "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+        `${label} elements must be enumerable own data properties`,
+      );
+    }
+    snapshot[index] = descriptor.value;
+  }
+  return snapshot;
+}
+
+function safePath(
+  value,
+  label,
+  code = "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+) {
   if (
     typeof value !== "string" ||
     !value ||
@@ -62,10 +170,18 @@ function safePath(value, label) {
     PATH_CONTROL.test(value) ||
     value.includes("\\") ||
     value.startsWith("/") ||
-    value.split("/").some((component) => !component || component === "." || component === "..")
+    value
+      .split("/")
+      .some(
+        (component) =>
+          !component ||
+          component === "." ||
+          component === ".." ||
+          PROTOTYPE_SENSITIVE_COMPONENTS.has(component),
+      )
   ) {
     fail(
-      "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+      code,
       `${label} must be a safe project-relative POSIX path`,
     );
   }
@@ -89,13 +205,15 @@ function boundedContent(value, label, { nonEmpty = false } = {}) {
 
 function validateOperation(value, index) {
   const label = `Builder operation ${index}`;
-  if (!isPlainObject(value) || typeof value.type !== "string") {
+  const snapshot = snapshotDataObject(value, label);
+  if (typeof snapshot.fields.type !== "string") {
     fail("CODEXLOOPER_BUILDER_OPERATIONS_INVALID", `${label} has an invalid type`);
   }
+  const type = snapshot.fields.type;
 
-  if (value.type === "create_file") {
-    exactFields(value, CREATE_FILE_FIELDS, label);
-    if (value.expected_absent !== true) {
+  if (type === "create_file") {
+    const fields = assertExactSnapshot(snapshot, CREATE_FILE_FIELDS, label);
+    if (fields.expected_absent !== true) {
       fail(
         "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
         `${label} create_file expected_absent must be true`,
@@ -103,79 +221,74 @@ function validateOperation(value, index) {
     }
     return Object.freeze({
       type: "create_file",
-      path: safePath(value.path, `${label} path`),
-      content: boundedContent(value.content, `${label} content`),
+      path: safePath(fields.path, `${label} path`),
+      content: boundedContent(fields.content, `${label} content`),
       expected_absent: true,
     });
   }
 
-  if (value.type === "replace_exact") {
-    exactFields(value, REPLACE_EXACT_FIELDS, label);
+  if (type === "replace_exact") {
+    const fields = assertExactSnapshot(snapshot, REPLACE_EXACT_FIELDS, label);
     if (
-      typeof value.expected_file_sha256 !== "string" ||
-      !SHA256.test(value.expected_file_sha256)
+      typeof fields.expected_file_sha256 !== "string" ||
+      !SHA256.test(fields.expected_file_sha256)
     ) {
       fail(
         "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
         `${label} expected_file_sha256 must be a lowercase SHA-256 digest`,
       );
     }
-    if (value.expected_occurrences !== 1) {
+    if (fields.expected_occurrences !== 1) {
       fail(
         "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
         `${label} expected_occurrences must be exactly 1`,
       );
     }
+    const oldText = boundedContent(fields.old_text, `${label} old_text`, { nonEmpty: true });
+    const newText = boundedContent(fields.new_text, `${label} new_text`);
+    if (oldText === newText) {
+      fail(
+        "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
+        `${label} replace_exact must change the matched text`,
+      );
+    }
     return Object.freeze({
       type: "replace_exact",
-      path: safePath(value.path, `${label} path`),
-      expected_file_sha256: value.expected_file_sha256,
-      old_text: boundedContent(value.old_text, `${label} old_text`, { nonEmpty: true }),
-      new_text: boundedContent(value.new_text, `${label} new_text`),
+      path: safePath(fields.path, `${label} path`),
+      expected_file_sha256: fields.expected_file_sha256,
+      old_text: oldText,
+      new_text: newText,
       expected_occurrences: 1,
     });
   }
 
   fail(
     "CODEXLOOPER_BUILDER_OPERATIONS_UNSUPPORTED",
-    `${label} type is unsupported: ${value.type}`,
+    `${label} type is unsupported: ${type}`,
   );
 }
 
-function encodedEnvelopeBytes(value) {
-  let encoded;
-  try {
-    encoded = JSON.stringify(value);
-  } catch {
-    fail("CODEXLOOPER_BUILDER_OPERATIONS_INVALID", "Builder operation envelope is not JSON-compatible");
-  }
-  return byteLength(encoded);
-}
-
 export function validateBuilderOperationEnvelope(value) {
-  exactFields(value, ENVELOPE_FIELDS, "Builder operation envelope");
-  if (value.version !== 2) {
+  const fields = snapshotExactDataObject(
+    value,
+    ENVELOPE_FIELDS,
+    "Builder operation envelope",
+  );
+  if (fields.version !== 2) {
     fail(
       "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
       "Builder operation envelope version must be exactly 2",
     );
   }
-  if (
-    !Array.isArray(value.operations) ||
-    value.operations.length === 0 ||
-    value.operations.length > BUILDER_OPERATION_LIMITS.max_operations
-  ) {
-    fail(
-      "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
-      "Builder operation envelope must contain a bounded non-empty operations array",
-    );
-  }
-
-  const operations = Array.from(value.operations, (operation, index) =>
-    validateOperation(operation, index),
+  const operationValues = snapshotDenseOrdinaryArray(
+    fields.operations,
+    "Builder operation envelope operations",
   );
+  const operations = [];
   const seen = new Set();
-  for (const operation of operations) {
+  let envelopeBytes = ENVELOPE_PREFIX_BYTES + ENVELOPE_SUFFIX_BYTES;
+  for (let index = 0; index < operationValues.length; index += 1) {
+    const operation = validateOperation(operationValues[index], index);
     if (seen.has(operation.path)) {
       fail(
         "CODEXLOOPER_BUILDER_OPERATIONS_INVALID",
@@ -183,19 +296,20 @@ export function validateBuilderOperationEnvelope(value) {
       );
     }
     seen.add(operation.path);
+    envelopeBytes += (index === 0 ? 0 : 1) + byteLength(JSON.stringify(operation));
+    if (envelopeBytes > BUILDER_OPERATION_LIMITS.max_envelope_bytes) {
+      fail(
+        "CODEXLOOPER_BUILDER_OPERATIONS_TOO_LARGE",
+        "Builder operation envelope exceeds its encoded byte limit",
+      );
+    }
+    operations.push(operation);
   }
 
-  const envelope = Object.freeze({
+  return Object.freeze({
     version: 2,
     operations: Object.freeze(operations),
   });
-  if (encodedEnvelopeBytes(envelope) > BUILDER_OPERATION_LIMITS.max_envelope_bytes) {
-    fail(
-      "CODEXLOOPER_BUILDER_OPERATIONS_TOO_LARGE",
-      "Builder operation envelope exceeds its encoded byte limit",
-    );
-  }
-  return envelope;
 }
 
 function compareText(left, right) {
@@ -211,16 +325,35 @@ function validateBaselineFiles(value) {
       "Builder operation baseline must be a plain object",
     );
   }
-  const entries = Object.entries(value).sort(([left], [right]) => compareText(left, right));
-  if (entries.length > BUILDER_OPERATION_LIMITS.max_baseline_files) {
+  const ownKeys = Reflect.ownKeys(value);
+  if (ownKeys.length > BUILDER_OPERATION_LIMITS.max_baseline_files) {
     fail(
       "CODEXLOOPER_BUILDER_BASELINE_INVALID",
       "Builder operation baseline exceeds its file-count limit",
     );
   }
+  const entries = [];
   let totalBytes = 0;
-  for (const [path, content] of entries) {
-    safePath(path, "Builder operation baseline path");
+  for (const path of ownKeys) {
+    if (typeof path !== "string") {
+      fail(
+        "CODEXLOOPER_BUILDER_BASELINE_INVALID",
+        "Builder operation baseline paths must be ordinary string keys",
+      );
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, path);
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) {
+      fail(
+        "CODEXLOOPER_BUILDER_BASELINE_INVALID",
+        `Builder operation baseline files must be enumerable own data properties: ${path}`,
+      );
+    }
+    const content = descriptor.value;
+    safePath(
+      path,
+      "Builder operation baseline path",
+      "CODEXLOOPER_BUILDER_BASELINE_INVALID",
+    );
     if (typeof content !== "string" || content.includes("\0")) {
       fail(
         "CODEXLOOPER_BUILDER_BASELINE_INVALID",
@@ -234,8 +367,9 @@ function validateBaselineFiles(value) {
         "Builder operation baseline exceeds its byte limit",
       );
     }
+    entries.push([path, content]);
   }
-  return entries;
+  return entries.sort(([left], [right]) => compareText(left, right));
 }
 
 function sha256(value) {
@@ -256,8 +390,8 @@ function occurrenceCount(haystack, needle) {
 }
 
 export function materializeBuilderOperations(baselineFiles, envelopeValue) {
-  const baselineEntries = validateBaselineFiles(baselineFiles);
   const envelope = validateBuilderOperationEnvelope(envelopeValue);
+  const baselineEntries = validateBaselineFiles(baselineFiles);
   const files = new Map(baselineEntries);
 
   for (const operation of envelope.operations) {
@@ -298,7 +432,7 @@ export function materializeBuilderOperations(baselineFiles, envelopeValue) {
     );
   }
 
-  const materialized = Object.fromEntries(
+  const materialized = new Map(
     [...files.entries()].sort(([left], [right]) => compareText(left, right)),
   );
   return {
