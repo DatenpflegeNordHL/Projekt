@@ -710,7 +710,7 @@ export async function runProject({
       {
         const cacheKey = crgCacheKey({ projectRoot, identity: receipt.crg.identity });
         const cachedBuild = readCrgBuildCache({ projectRoot, key: cacheKey });
-        const cacheDataDirectory = crgCacheDataDirectory({ projectRoot, key: cacheKey, create: !cachedBuild });
+        const cacheDataDirectory = crgCacheDataDirectory({ projectRoot, key: cacheKey, create: !cachedBuild, allowExisting: Boolean(cachedBuild) });
         if (cachedBuild && !cacheDataDirectory) fail("CODEXLOOPER_CRG_CACHE_INTEGRITY", "CRG cache graph data is missing");
         const options = {
           projectRoot,

@@ -19,5 +19,8 @@ test("CRG cache reuses only an exact trusted identity key and fails closed on ta
     const path = join(root, ".codexlooper", "crg-cache", `${key}.json`);
     writeFileSync(path, "{}", { mode: 0o600 }); chmodSync(path, 0o600);
     assert.throws(() => readCrgBuildCache({ projectRoot: root, key }), /does not match/);
+    const partialKey = crgCacheKey({ projectRoot: root, identity: { ...identity, current_trusted_head: "c".repeat(40) } });
+    crgCacheDataDirectory({ projectRoot: root, key: partialKey, create: true });
+    assert.throws(() => crgCacheDataDirectory({ projectRoot: root, key: partialKey, create: true }), /without a committed marker/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

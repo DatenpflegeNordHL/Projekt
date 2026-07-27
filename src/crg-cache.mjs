@@ -31,13 +31,15 @@ export function readCrgBuildCache({ projectRoot, key } = {}) {
   return Object.freeze(entry);
 }
 
-export function crgCacheDataDirectory({ projectRoot, key, create = false } = {}) {
+export function crgCacheDataDirectory({ projectRoot, key, create = false, allowExisting = false } = {}) {
   if (typeof key !== "string" || !/^[a-f0-9]{64}$/.test(key)) fail("CRG cache key is invalid");
   const path = resolve(directory(projectRoot), `${key}.data`);
   if (!existsSync(path)) {
     if (!create) return null;
     mkdirSync(path, { recursive: true, mode: 0o700 });
     chmodSync(path, 0o700);
+  } else if (create && !allowExisting) {
+    fail("CRG cache graph data exists without a committed marker");
   }
   return safeDirectory(path);
 }
