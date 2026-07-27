@@ -28,6 +28,7 @@ import { assertManifestExternalTool, verifyRuntimeManifest } from "./runtime-int
 import { aggregateUsage, readUsageEvents } from "./telemetry.mjs";
 import { createCrgMacosSandboxLaunch, disabledCrgResult, executeCrgStandalone } from "./code-review-graph.mjs";
 import { createSolAdvisoryProjection } from "./sol-advisory.mjs";
+import { crgCacheKey, readCrgBuildCache, writeCrgBuildCache } from "./crg-cache.mjs";
 import { deriveCrgSandboxIdentity, optionalCrgRuntimeConfig, verifyCrgSandboxIdentity } from "./crg-runtime-config.mjs";
 
 const MAX_PLAN_BYTES = 2_000_000;
@@ -706,8 +707,9 @@ export async function runProject({
       currentTrustedHead: trustedCrgAuthority.head,
     });
     if (crgConfig.status === "configured" && budgets.max_crg_builds > 0) {
-      try {
-        const buildBudget = reserveCrgBuild({ sourceEnv: { ...env, CODEXLOOPER_BUDGET_PATH: budget.statePath }, projectRoot });
+      {
+        const cacheKey = crgCacheKey({ projectRoot, identity: receipt.crg.identity });
+        const cachedBuild = readCrgBuildCache({ projectRoot, key: cacheKey });
         const options = {
           projectRoot,
           runDir: runDirectory,
@@ -723,16 +725,15 @@ export async function runProject({
           sandboxCommand: configured.sandbox.path,
           operation,
         });
-        const build = executeCrgStandalone({ ...options, launch: launchFor("build"), operation: "build" });
+        const buildBudget = cachedBuild ? readRunBudget({ budgetPath: budget.statePath, projectRoot }) : reserveCrgBuild({ sourceEnv: { ...env, CODEXLOOPER_BUDGET_PATH: budget.statePath }, projectRoot });
+        const build = cachedBuild ? { status: "available", version: cachedBuild.version } : executeCrgStandalone({ ...options, launch: launchFor("build"), operation: "build" });
+        if (!cachedBuild && build.status === "available") writeCrgBuildCache({ projectRoot, key: cacheKey, version: build.version });
         const crgResult = build.status === "available"
           ? executeCrgStandalone({ ...options, launch: launchFor("detect-changes"), operation: "detect-changes" })
           : build;
         receipt.crg.result = { ...crgResult, report_path: null };
         receipt.crg.builds = buildBudget.crg_builds;
         receipt.crg.status = crgResult.status;
-      } catch (error) {
-        receipt.crg.status = "failed";
-        receipt.crg.result = { ...disabledCrgResult(), status: "failed", error_class: "internal_error" };
       }
     }
     const solProjection = createSolAdvisoryProjection(receipt.crg.result);
