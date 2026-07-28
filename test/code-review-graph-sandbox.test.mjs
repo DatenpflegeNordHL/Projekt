@@ -65,6 +65,7 @@ test("constructs a pinned static macOS sandbox launch without executing CRG", ()
     assert.equal(launch.env.CRG_PARSE_EXECUTOR, "thread");
     assert.equal(launch.env.CRG_PARSE_WORKERS, "1");
     assert.match(launch.profile, /^\(deny network\*\)$/m);
+    assert.match(launch.profile, /^\(allow sysctl-read\)$/m);
     assert.match(launch.profile, new RegExp(`process-exec\\* \\(literal "${value.command}"\\)`));
     assert.match(launch.profile, new RegExp(`process-exec\\* \\(literal "${value.launcher}"\\)`));
     assert.match(launch.profile, new RegExp(`process-exec\\* \\(literal "${value.interpreter}"\\)`));
@@ -94,6 +95,17 @@ test("real macOS sandbox-exec permits the sealed launcher rather than denying ex
     });
     assert.equal(result.status, 0, result.stderr);
   });
+});
+
+test("macOS sysctl-read permits CPython uname and ctypes without network or writes", { skip: platform() !== "darwin" }, () => {
+  const python = "/opt/homebrew/bin/python3";
+  const program = "import ctypes, os; print(os.uname().sysname)";
+  const profile = [
+    "(version 1)", "(deny default)", "(deny network*)", "(allow process-exec*)", "(allow file-read*)", "(allow sysctl-read)",
+  ].join("\n");
+  const allowed = spawnSync("/usr/bin/sandbox-exec", ["-p", profile, python, "-c", program], { encoding: "utf8" });
+  assert.equal(allowed.status, 0, allowed.stderr);
+  assert.equal(allowed.stdout.trim(), "Darwin");
 });
 
 test("rejects command and interpreter substitutions, symlink escapes, and outside runtime roots", () => {
