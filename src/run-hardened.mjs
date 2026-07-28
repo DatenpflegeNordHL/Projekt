@@ -692,21 +692,23 @@ export async function runProject({
     if (trustedCrgAuthority.branch !== branch || trustedCrgAuthority.head !== postPreflight.head) {
       fail("CODEXLOOPER_CRG_TRUSTED_HEAD_CHANGED", "Trusted Git state changed across CRG verification boundary");
     }
-    const crgIdentity = deriveCrgSandboxIdentity({
-      configured: crgConfig,
-      projectRoot,
-      runDirectory,
-      runStartSha: headBefore,
-      currentTrustedHead: trustedCrgAuthority.head,
-    });
-    receipt.crg.identity = verifyCrgSandboxIdentity({
-      expected: crgIdentity,
-      configured: optionalCrgRuntimeConfig(env),
-      projectRoot,
-      runDirectory,
-      runStartSha: headBefore,
-      currentTrustedHead: trustedCrgAuthority.head,
-    });
+    if (crgConfig.status === "configured") {
+      const crgIdentity = deriveCrgSandboxIdentity({
+        configured: crgConfig,
+        projectRoot,
+        runDirectory,
+        runStartSha: headBefore,
+        currentTrustedHead: trustedCrgAuthority.head,
+      });
+      receipt.crg.identity = verifyCrgSandboxIdentity({
+        expected: crgIdentity,
+        configured: optionalCrgRuntimeConfig(env),
+        projectRoot,
+        runDirectory,
+        runStartSha: headBefore,
+        currentTrustedHead: trustedCrgAuthority.head,
+      });
+    }
     if (crgConfig.status === "configured" && budgets.max_crg_builds > 0) {
       {
         const cacheKey = crgCacheKey({ projectRoot, identity: receipt.crg.identity });

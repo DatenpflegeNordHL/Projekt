@@ -320,7 +320,7 @@ test("configured CRG is sealed for the runner only and preflight rejects tamperi
     for (const path of [installed.controlledCodex, installed.terraExecutor, installed.solReviewer, installed.ralphexVcsGuard]) {
       assert.doesNotMatch(readFileSync(path, "utf8"), /CODEXLOOPER_CRG_CONFIG/);
     }
-    process.env.CODEXLOOPER_CRG_CONFIG = join(fixture.project, ".codexlooper", "crg-runtime-config.json");
+    process.env.CODEXLOOPER_CRG_CONFIG = realpathSync(join(fixture.project, ".codexlooper", "crg-runtime-config.json"));
     process.env.CODEXLOOPER_CRG_CONFIG_SHA256 = installed.crg.configSha256;
     assert.equal(runPreflight([
       "--project", fixture.project,
