@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, copyFileSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { platform, tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
@@ -20,10 +20,10 @@ function fixture() {
   mkdirSync(run);
   mkdirSync(bin, { recursive: true });
   mkdirSync(resolve(pythonRuntimeRoot, "bin"), { recursive: true });
-  for (const path of [interpreter, command]) {
-    writeFileSync(path, "#!/bin/sh\nexit 0\n");
-    chmodSync(path, 0o755);
-  }
+  copyFileSync("/usr/bin/true", interpreter);
+  chmodSync(interpreter, 0o755);
+  writeFileSync(command, `#!${interpreter}\n`);
+  chmodSync(command, 0o755);
   writeFileSync(sandbox, `#!/bin/sh
 case "$2" in
   *${pythonRuntimeRoot}*) echo 'code-review-graph 2.3.6' ;;
@@ -60,9 +60,64 @@ test("constructs a pinned static macOS sandbox launch without executing CRG", ()
     assert.equal(launch.env.CRG_PARSE_EXECUTOR, "thread");
     assert.equal(launch.env.CRG_PARSE_WORKERS, "1");
     assert.match(launch.profile, /^\(deny network\*\)$/m);
+    assert.match(launch.profile, new RegExp(`process-exec\\* \\(literal "${value.command}"\\)`));
+    assert.match(launch.profile, new RegExp(`process-exec\\* \\(literal "${value.interpreter}"\\)`));
+    assert.doesNotMatch(launch.profile, /^\(allow process\*\)$/m);
     assert.match(launch.profile, new RegExp(`file-write\\* \\(subpath "${value.run}"\\)`));
+    assert.match(launch.profile, /^\(allow file-read\* \(literal "\/"\)\)$/m);
     assert.match(launch.profile, new RegExp(`file-read\\* \\(subpath "${value.pythonRuntimeRoot}"\\)`));
     assert.match(launch.profile_sha256, /^[a-f0-9]{64}$/);
+  });
+});
+
+test("real macOS sandbox-exec permits the sealed launcher rather than denying execvp", { skip: platform() !== "darwin" }, () => {
+  withFixture((value) => {
+    const launch = createCrgMacosSandboxLaunch({
+      projectRoot: value.project,
+      runDir: value.run,
+      environmentRoot: value.environment,
+      interpreterPath: value.interpreter,
+      commandPath: value.command,
+      pythonRuntimeRoot: value.pythonRuntimeRoot,
+      sandboxCommand: "/usr/bin/sandbox-exec",
+    });
+    const result = spawnSync(launch.executable, launch.args, {
+      encoding: "utf8",
+      env: launch.env,
+      shell: false,
+    });
+    assert.equal(result.status, 0, result.stderr);
+  });
+});
+
+test("rejects command and interpreter substitutions, symlink escapes, and outside runtime roots", () => {
+  withFixture((value) => {
+    const options = {
+      projectRoot: value.project,
+      runDir: value.run,
+      environmentRoot: value.environment,
+      interpreterPath: value.interpreter,
+      commandPath: value.command,
+      pythonRuntimeRoot: value.pythonRuntimeRoot,
+      sandboxCommand: value.sandbox,
+    };
+    const outside = resolve(value.root, "outside-command");
+    writeFileSync(outside, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    chmodSync(outside, 0o755);
+    assert.throws(
+      () => createCrgMacosSandboxLaunch({ ...options, commandPath: outside }),
+      (error) => error.code === "CODEXLOOPER_CRG_UNSAFE_COMMAND",
+    );
+    assert.throws(
+      () => createCrgMacosSandboxLaunch({ ...options, pythonRuntimeRoot: value.environment }),
+      (error) => error.code === "CODEXLOOPER_CRG_UNSAFE_COMMAND",
+    );
+    const linkedCommand = resolve(value.environment, "bin", "linked-command");
+    symlinkSync(value.command, linkedCommand);
+    assert.throws(
+      () => createCrgMacosSandboxLaunch({ ...options, commandPath: linkedCommand }),
+      (error) => error.code === "CODEXLOOPER_CRG_UNSAFE_COMMAND",
+    );
   });
 });
 
