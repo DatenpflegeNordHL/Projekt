@@ -502,10 +502,14 @@ function validateSandboxCommand(path) {
   ).path;
 }
 
-function createCrgMacosSandboxProfile({ paths, environmentRoot, interpreterPath, commandPath }) {
+function createCrgMacosSandboxProfile({ paths, environmentRoot, interpreterPath, commandPath, pythonRuntimeRoot }) {
   const environment = canonicalDirectory(environmentRoot, "CRG environment root");
   const interpreter = canonicalRegularFile(interpreterPath, "CRG interpreter").path;
   const command = canonicalRegularFile(commandPath, "CRG console command", "CODEXLOOPER_CRG_UNSAFE_COMMAND").path;
+  const pythonRuntime = canonicalDirectory(pythonRuntimeRoot, "CRG Python runtime root");
+  if (!relativeInside(pythonRuntime, interpreter)) {
+    foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG interpreter must stay below the sealed Python runtime root");
+  }
   if (!relativeInside(environment, command)) {
     foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG console command must stay inside the sealed environment");
   }
@@ -513,6 +517,7 @@ function createCrgMacosSandboxProfile({ paths, environmentRoot, interpreterPath,
     paths.project_root,
     environment,
     interpreter,
+    pythonRuntime,
     "/System",
     "/usr/lib",
     "/usr/share",
@@ -556,6 +561,7 @@ export function createCrgMacosSandboxLaunch({
   environmentRoot,
   interpreterPath,
   commandPath,
+  pythonRuntimeRoot,
   sandboxCommand = CRG_MACOS_SANDBOX_COMMAND,
   operation = "version",
   baseSha,
@@ -568,6 +574,7 @@ export function createCrgMacosSandboxLaunch({
     environmentRoot,
     interpreterPath,
     commandPath,
+    pythonRuntimeRoot,
   });
   const profileSha256 = foundationSha256(sandboxProfile.profile);
   if (

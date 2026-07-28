@@ -36,6 +36,7 @@ const OPTIONAL_ARGUMENTS = new Set([
   "--crg-interpreter",
   "--crg-command",
   "--crg-sandbox",
+  "--crg-python-runtime-root",
 ]);
 const ALLOWED_ARGUMENTS = new Set([...REQUIRED_ARGUMENTS, ...OPTIONAL_ARGUMENTS]);
 const MODEL_ID = /^[a-z0-9._-]+\/[a-z0-9._-]+$/i;
@@ -288,8 +289,8 @@ export function install(argv = process.argv.slice(2)) {
   const builderReasoning = args["--builder-reasoning"];
   const reviewReasoning = args["--review-reasoning"];
   const budgets = parseBudgets(args);
-  const crgValues = [args["--crg-environment"], args["--crg-interpreter"], args["--crg-command"], args["--crg-sandbox"]];
-  if (crgValues.some(Boolean) && crgValues.some((value) => !value)) fail("CRG configuration requires environment, interpreter, command and sandbox");
+  const crgValues = [args["--crg-environment"], args["--crg-interpreter"], args["--crg-command"], args["--crg-sandbox"], args["--crg-python-runtime-root"]];
+  if (crgValues.some(Boolean) && crgValues.some((value) => !value)) fail("CRG configuration requires environment, interpreter, command, sandbox and Python runtime root");
 
   if (!ALLOWED_REASONING.has(builderReasoning) || !ALLOWED_REASONING.has(reviewReasoning)) {
     fail("Reasoning must be low, medium or high");
@@ -343,6 +344,7 @@ export function install(argv = process.argv.slice(2)) {
       interpreterPath: args["--crg-interpreter"],
       commandPath: args["--crg-command"],
       sandboxCommand: args["--crg-sandbox"],
+      pythonRuntimeRoot: args["--crg-python-runtime-root"],
     }));
     const path = resolve(home, "crg-runtime-config.json");
     writeAtomic(path, content, 0o600);

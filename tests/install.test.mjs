@@ -216,7 +216,7 @@ case "$*" in
   *) echo 'code-review-graph 2.3.6' ;;
 esac
 `);
-  return ["--crg-environment", environment, "--crg-interpreter", interpreter, "--crg-command", command, "--crg-sandbox", sandbox];
+  return ["--crg-environment", environment, "--crg-interpreter", interpreter, "--crg-command", command, "--crg-sandbox", sandbox, "--crg-python-runtime-root", environment];
 }
 
 function modelEnv(extra = {}) {

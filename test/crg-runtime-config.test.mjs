@@ -25,7 +25,7 @@ function configuredFixture() {
   const interpreter = executable(join(environment, "bin", "python"));
   const command = executable(join(environment, "bin", "crg"));
   const sandbox = executable(join(root, "sandbox-exec"));
-  const content = serializeCrgRuntimeConfig(createCrgRuntimeConfig({ environmentRoot: environment, interpreterPath: interpreter, commandPath: command, sandboxCommand: sandbox }));
+  const content = serializeCrgRuntimeConfig(createCrgRuntimeConfig({ environmentRoot: environment, interpreterPath: interpreter, commandPath: command, sandboxCommand: sandbox, pythonRuntimeRoot: environment }));
   const config = join(root, "config.json");
   writeFileSync(config, content, { mode: 0o600 });
   chmodSync(config, 0o600);
@@ -64,6 +64,18 @@ test("sealed CRG config fails closed for tampering, permissions, and symlinks", 
     const linked = join(fixture.root, "linked.json");
     symlinkSync(fixture.config, linked);
     assert.throws(() => optionalCrgRuntimeConfig({ CODEXLOOPER_CRG_CONFIG: linked, CODEXLOOPER_CRG_CONFIG_SHA256: sha256 }), /canonical/);
+    const outside = join(fixture.root, "outside");
+    mkdirSync(outside);
+    assert.throws(
+      () => createCrgRuntimeConfig({ environmentRoot: fixture.environment, interpreterPath: join(fixture.environment, "bin", "python"), commandPath: join(fixture.environment, "bin", "crg"), sandboxCommand: join(fixture.root, "sandbox-exec"), pythonRuntimeRoot: outside }),
+      /interpreter must stay below/,
+    );
+    const linkedRoot = join(fixture.root, "linked-runtime");
+    symlinkSync(fixture.environment, linkedRoot);
+    assert.throws(
+      () => createCrgRuntimeConfig({ environmentRoot: fixture.environment, interpreterPath: join(fixture.environment, "bin", "python"), commandPath: join(fixture.environment, "bin", "crg"), sandboxCommand: join(fixture.root, "sandbox-exec"), pythonRuntimeRoot: linkedRoot }),
+      /canonical non-symlink/,
+    );
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

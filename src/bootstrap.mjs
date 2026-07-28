@@ -32,6 +32,7 @@ const OPTIONAL_ARGUMENTS = new Set([
   "--crg-interpreter",
   "--crg-command",
   "--crg-sandbox",
+  "--crg-python-runtime-root",
 ]);
 const ALLOWED_ARGUMENTS = new Set([...REQUIRED_ARGUMENTS, ...OPTIONAL_ARGUMENTS]);
 const MAX_TOOL_OUTPUT = 12_000;

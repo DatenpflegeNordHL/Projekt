@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { createCrgMacosSandboxLaunch } from "../src/code-review-graph.mjs";
 
@@ -11,17 +12,26 @@ function fixture() {
   const run = resolve(root, "run");
   const environment = resolve(root, "environment");
   const bin = resolve(environment, "bin");
-  const interpreter = resolve(root, "python");
+  const pythonRuntimeRoot = resolve(root, "uv-python-3.13");
+  const interpreter = resolve(pythonRuntimeRoot, "bin", "python3.13");
   const command = resolve(bin, "code-review-graph");
   const sandbox = resolve(root, "sandbox-exec");
   mkdirSync(project);
   mkdirSync(run);
   mkdirSync(bin, { recursive: true });
-  for (const path of [interpreter, command, sandbox]) {
+  mkdirSync(resolve(pythonRuntimeRoot, "bin"), { recursive: true });
+  for (const path of [interpreter, command]) {
     writeFileSync(path, "#!/bin/sh\nexit 0\n");
     chmodSync(path, 0o755);
   }
-  return { root, project, run, environment, interpreter, command, sandbox };
+  writeFileSync(sandbox, `#!/bin/sh
+case "$2" in
+  *${pythonRuntimeRoot}*) echo 'code-review-graph 2.3.6' ;;
+  *) exit 71 ;;
+esac
+`, { mode: 0o755 });
+  chmodSync(sandbox, 0o755);
+  return { root, project, run, environment, pythonRuntimeRoot, interpreter, command, sandbox };
 }
 
 function withFixture(callback) {
@@ -41,6 +51,7 @@ test("constructs a pinned static macOS sandbox launch without executing CRG", ()
       environmentRoot: value.environment,
       interpreterPath: value.interpreter,
       commandPath: value.command,
+      pythonRuntimeRoot: value.pythonRuntimeRoot,
       sandboxCommand: value.sandbox,
     });
     assert.equal(launch.executable, value.sandbox);
@@ -50,7 +61,25 @@ test("constructs a pinned static macOS sandbox launch without executing CRG", ()
     assert.equal(launch.env.CRG_PARSE_WORKERS, "1");
     assert.match(launch.profile, /^\(deny network\*\)$/m);
     assert.match(launch.profile, new RegExp(`file-write\\* \\(subpath "${value.run}"\\)`));
+    assert.match(launch.profile, new RegExp(`file-read\\* \\(subpath "${value.pythonRuntimeRoot}"\\)`));
     assert.match(launch.profile_sha256, /^[a-f0-9]{64}$/);
+  });
+});
+
+test("permits a controlled external uv-like Python runtime for sandboxed CRG version startup", () => {
+  withFixture((value) => {
+    const launch = createCrgMacosSandboxLaunch({
+      projectRoot: value.project,
+      runDir: value.run,
+      environmentRoot: value.environment,
+      interpreterPath: value.interpreter,
+      commandPath: value.command,
+      sandboxCommand: value.sandbox,
+      pythonRuntimeRoot: value.pythonRuntimeRoot,
+    });
+    const result = spawnSync(launch.executable, launch.args, { encoding: "utf8", env: launch.env, shell: false });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "code-review-graph 2.3.6");
   });
 });
 
@@ -62,6 +91,7 @@ test("rejects unavailable sandboxes, unsafe private paths, and profile mismatche
       environmentRoot: value.environment,
       interpreterPath: value.interpreter,
       commandPath: value.command,
+      pythonRuntimeRoot: value.pythonRuntimeRoot,
       sandboxCommand: value.sandbox,
     };
     assert.throws(
@@ -87,6 +117,7 @@ test("allows only the pinned CRG argument arrays", () => {
       environmentRoot: value.environment,
       interpreterPath: value.interpreter,
       commandPath: value.command,
+      pythonRuntimeRoot: value.pythonRuntimeRoot,
       sandboxCommand: value.sandbox,
     };
     const build = createCrgMacosSandboxLaunch({ ...options, operation: "build" });

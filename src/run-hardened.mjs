@@ -729,6 +729,7 @@ export async function runProject({
           environmentRoot: configured.environment.environment_root,
           interpreterPath: configured.environment.interpreter.path,
           commandPath: configured.environment.command.path,
+          pythonRuntimeRoot: configured.python_runtime_root.path,
           sandboxCommand: configured.sandbox.path,
           operation,
         });

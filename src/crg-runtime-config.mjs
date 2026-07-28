@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { createCrgMacosSandboxLaunch, captureCrgEnvironmentIdentity, verifyCrgEnvironmentIdentity } from "./code-review-graph.mjs";
 import { canonicalExecutable } from "./runtime-integrity.mjs";
 
@@ -37,18 +37,35 @@ function exactKeys(value, keys) {
   }
 }
 
-export function createCrgRuntimeConfig({ environmentRoot, interpreterPath, commandPath, sandboxCommand } = {}) {
+function inside(root, path) {
+  const value = relative(root, path);
+  return Boolean(value) && !value.startsWith(`..${sep}`) && value !== ".." && !isAbsolute(value);
+}
+
+function canonicalPythonRuntimeRoot(path, interpreterPath) {
+  if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0")) fail("Python runtime root is invalid");
+  const canonical = realpathSync(path);
+  const stat = lstatSync(path);
+  if (canonical !== path || stat.isSymbolicLink() || !stat.isDirectory()) fail("Python runtime root must be a canonical non-symlink directory");
+  const interpreter = canonicalExecutable(interpreterPath, "CRG interpreter");
+  if (!inside(canonical, interpreter.path)) fail("CRG interpreter must stay below the sealed Python runtime root");
+  return Object.freeze({ path: canonical, interpreter_sha256: interpreter.sha256 });
+}
+
+export function createCrgRuntimeConfig({ environmentRoot, interpreterPath, commandPath, sandboxCommand, pythonRuntimeRoot } = {}) {
   const environment = captureCrgEnvironmentIdentity({ environmentRoot, interpreterPath, commandPath });
   const sandbox = canonicalExecutable(sandboxCommand, "CRG sandbox executable");
+  const python_runtime_root = canonicalPythonRuntimeRoot(pythonRuntimeRoot, interpreterPath);
   return Object.freeze({
     schema: CRG_RUNTIME_CONFIG_SCHEMA,
     environment,
     sandbox,
+    python_runtime_root,
   });
 }
 
 export function serializeCrgRuntimeConfig(config) {
-  exactKeys(config, ["schema", "environment", "sandbox"]);
+  exactKeys(config, ["schema", "environment", "sandbox", "python_runtime_root"]);
   if (config.schema !== CRG_RUNTIME_CONFIG_SCHEMA) fail("CRG config schema is invalid");
   return `${JSON.stringify(config, null, 2)}\n`;
 }
@@ -64,7 +81,7 @@ export function readCrgRuntimeConfig({ configPath, expectedSha256 } = {}) {
   } catch {
     fail("CRG config is not valid JSON");
   }
-  exactKeys(config, ["schema", "environment", "sandbox"]);
+  exactKeys(config, ["schema", "environment", "sandbox", "python_runtime_root"]);
   if (config.schema !== CRG_RUNTIME_CONFIG_SCHEMA) fail("CRG config schema is invalid");
   if (!config.sandbox || typeof config.sandbox !== "object") fail("CRG sandbox identity is invalid");
   const sandbox = canonicalExecutable(config.sandbox.path, "CRG sandbox executable");
@@ -75,7 +92,9 @@ export function readCrgRuntimeConfig({ configPath, expectedSha256 } = {}) {
     commandPath: config.environment?.command?.path,
     manifest: config.environment,
   });
-  return Object.freeze({ path, sha256: expectedSha256, config: Object.freeze({ ...config, environment, sandbox }) });
+  const pythonRuntimeRoot = canonicalPythonRuntimeRoot(config.python_runtime_root?.path, environment.interpreter.path);
+  if (JSON.stringify(pythonRuntimeRoot) !== JSON.stringify(config.python_runtime_root)) fail("Python runtime root identity does not match");
+  return Object.freeze({ path, sha256: expectedSha256, config: Object.freeze({ ...config, environment, sandbox, python_runtime_root: pythonRuntimeRoot }) });
 }
 
 export function optionalCrgRuntimeConfig(sourceEnv = process.env) {
@@ -101,6 +120,7 @@ export function deriveCrgSandboxIdentity({ configured, projectRoot, runDirectory
     environmentRoot: configured.config.environment.environment_root,
     interpreterPath: configured.config.environment.interpreter.path,
     commandPath: configured.config.environment.command.path,
+    pythonRuntimeRoot: configured.config.python_runtime_root.path,
     sandboxCommand: configured.config.sandbox.path,
     operation: "build",
     baseSha: runStart,
