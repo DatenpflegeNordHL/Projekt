@@ -267,7 +267,7 @@ const {
 const { basename, isAbsolute, relative, resolve, sep } = await import("node:path");
 const { spawnSync } = await import("node:child_process");
 
-export const CRG_ENVIRONMENT_MANIFEST_SCHEMA = "codexlooper.crg-environment.v1";
+export const CRG_ENVIRONMENT_MANIFEST_SCHEMA = "codexlooper.crg-environment.v2";
 export const CRG_LEGACY_REPOSITORY_PATHS = Object.freeze([
   ".code-review-graph.db",
   ".code-review-graph.db-wal",
@@ -401,6 +401,56 @@ function inspectEnvironmentEntries(root, interpreterPath) {
   return entries;
 }
 
+function captureCrgExecutionChain({ root, command, interpreter, pythonRuntimeRoot }) {
+  const bytes = readFileSync(command.path);
+  const newline = bytes.indexOf(0x0a);
+  if (newline < 3 || newline > 4096 || bytes[0] !== 0x23 || bytes[1] !== 0x21) {
+    foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG console command must have a bounded absolute shebang");
+  }
+  const shebang = bytes.subarray(2, newline).toString("utf8");
+  if (!isAbsolute(shebang) || shebang.includes("\0") || shebang.includes("\uFFFD") || /[\r\t ]/u.test(shebang)) {
+    foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG console command shebang must name one absolute launcher path");
+  }
+  const launcherPath = resolve(shebang);
+  if (!relativeInside(root, launcherPath) || manifestEntryPath(root, resolve(launcherPath, "..")) !== "bin" || !PYTHON_LAUNCHER.test(basename(launcherPath))) {
+    foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG console command shebang must name the sealed environment Python launcher");
+  }
+  let launcher;
+  let target;
+  let linkTarget;
+  try {
+    launcher = lstatSync(launcherPath);
+    if (!launcher.isSymbolicLink()) throw new Error("not a symlink");
+    linkTarget = readlinkSync(launcherPath);
+    target = resolve(launcherPath, "..", linkTarget);
+  } catch {
+    foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG console command shebang launcher must be a readable symlink");
+  }
+  let targetStat;
+  let resolvedTarget;
+  try {
+    targetStat = lstatSync(target);
+    resolvedTarget = realpathSync(target);
+  } catch {
+    foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG console command shebang launcher target is unavailable");
+  }
+  if (targetStat.isSymbolicLink() || !targetStat.isFile() || resolvedTarget !== target || target !== interpreter.path) {
+    foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG console command shebang launcher must directly target the sealed interpreter");
+  }
+  if (pythonRuntimeRoot && !relativeInside(pythonRuntimeRoot, resolvedTarget)) {
+    foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG console command shebang interpreter must stay below the sealed Python runtime root");
+  }
+  return Object.freeze({
+    command_path: command.path,
+    command_sha256: command.sha256,
+    launcher_path: launcherPath,
+    launcher_mode: launcher.mode & 0o777,
+    launcher_link_target: linkTarget,
+    interpreter_path: interpreter.path,
+    interpreter_sha256: interpreter.sha256,
+  });
+}
+
 export function captureCrgEnvironmentIdentity({ environmentRoot, interpreterPath, commandPath } = {}) {
   const root = canonicalDirectory(environmentRoot, "CRG environment root");
   const interpreter = canonicalRegularFile(interpreterPath, "CRG interpreter");
@@ -414,6 +464,7 @@ export function captureCrgEnvironmentIdentity({ environmentRoot, interpreterPath
     entries: Object.freeze(inspectEnvironmentEntries(root, interpreter.path).map((entry) => Object.freeze(entry))),
     interpreter: Object.freeze(interpreter),
     command: Object.freeze(command),
+    execution_chain: captureCrgExecutionChain({ root, command, interpreter }),
   });
 }
 
@@ -421,7 +472,15 @@ export function verifyCrgEnvironmentIdentity({ environmentRoot, interpreterPath,
   if (!manifest || typeof manifest !== "object" || manifest.schema !== CRG_ENVIRONMENT_MANIFEST_SCHEMA) {
     foundationFail("CODEXLOOPER_CRG_ENVIRONMENT_INTEGRITY", "CRG environment manifest schema is invalid");
   }
-  const actual = captureCrgEnvironmentIdentity({ environmentRoot, interpreterPath, commandPath });
+  let actual;
+  try {
+    actual = captureCrgEnvironmentIdentity({ environmentRoot, interpreterPath, commandPath });
+  } catch (error) {
+    if (error?.code === "CODEXLOOPER_CRG_UNSAFE_COMMAND") {
+      foundationFail("CODEXLOOPER_CRG_ENVIRONMENT_INTEGRITY", "CRG environment execution chain no longer matches its sealed identity");
+    }
+    throw error;
+  }
   if (JSON.stringify(actual) !== JSON.stringify(manifest)) {
     foundationFail("CODEXLOOPER_CRG_ENVIRONMENT_INTEGRITY", "CRG environment does not match its sealed manifest");
   }
@@ -513,6 +572,12 @@ function createCrgMacosSandboxProfile({ paths, environmentRoot, interpreterPath,
   if (!relativeInside(environment, command)) {
     foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG console command must stay inside the sealed environment");
   }
+  const chain = captureCrgExecutionChain({
+    root: environment,
+    command: canonicalRegularFile(commandPath, "CRG console command", "CODEXLOOPER_CRG_UNSAFE_COMMAND"),
+    interpreter: canonicalRegularFile(interpreterPath, "CRG interpreter"),
+    pythonRuntimeRoot: pythonRuntime,
+  });
   const readable = [
     paths.project_root,
     environment,
@@ -532,6 +597,7 @@ function createCrgMacosSandboxProfile({ paths, environmentRoot, interpreterPath,
       "(deny default)",
       "(deny network*)",
       `(allow process-exec* (literal ${sandboxLiteral(command)}))`,
+      `(allow process-exec* (literal ${sandboxLiteral(chain.launcher_path)}))`,
       `(allow process-exec* (literal ${sandboxLiteral(interpreter)}))`,
       `(allow file-read* (literal ${sandboxLiteral("/")}))`,
       ...readable.map((path) => `(allow file-read* (subpath ${sandboxLiteral(path)}))`),

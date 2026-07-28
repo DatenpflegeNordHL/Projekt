@@ -14,6 +14,7 @@ function fixture() {
   const bin = resolve(environment, "bin");
   const pythonRuntimeRoot = resolve(root, "uv-python-3.13");
   const interpreter = resolve(pythonRuntimeRoot, "bin", "python3.13");
+  const launcher = resolve(bin, "python");
   const command = resolve(bin, "code-review-graph");
   const sandbox = resolve(root, "sandbox-exec");
   mkdirSync(project);
@@ -22,7 +23,8 @@ function fixture() {
   mkdirSync(resolve(pythonRuntimeRoot, "bin"), { recursive: true });
   copyFileSync("/usr/bin/true", interpreter);
   chmodSync(interpreter, 0o755);
-  writeFileSync(command, `#!${interpreter}\n`);
+  symlinkSync(interpreter, launcher);
+  writeFileSync(command, `#!${launcher}\n`);
   chmodSync(command, 0o755);
   writeFileSync(sandbox, `#!/bin/sh
 case "$2" in
@@ -31,7 +33,7 @@ case "$2" in
 esac
 `, { mode: 0o755 });
   chmodSync(sandbox, 0o755);
-  return { root, project, run, environment, pythonRuntimeRoot, interpreter, command, sandbox };
+  return { root, project, run, environment, pythonRuntimeRoot, interpreter, launcher, command, sandbox };
 }
 
 function withFixture(callback) {
@@ -61,6 +63,7 @@ test("constructs a pinned static macOS sandbox launch without executing CRG", ()
     assert.equal(launch.env.CRG_PARSE_WORKERS, "1");
     assert.match(launch.profile, /^\(deny network\*\)$/m);
     assert.match(launch.profile, new RegExp(`process-exec\\* \\(literal "${value.command}"\\)`));
+    assert.match(launch.profile, new RegExp(`process-exec\\* \\(literal "${value.launcher}"\\)`));
     assert.match(launch.profile, new RegExp(`process-exec\\* \\(literal "${value.interpreter}"\\)`));
     assert.doesNotMatch(launch.profile, /^\(allow process\*\)$/m);
     assert.match(launch.profile, new RegExp(`file-write\\* \\(subpath "${value.run}"\\)`));
@@ -118,6 +121,40 @@ test("rejects command and interpreter substitutions, symlink escapes, and outsid
       () => createCrgMacosSandboxLaunch({ ...options, commandPath: linkedCommand }),
       (error) => error.code === "CODEXLOOPER_CRG_UNSAFE_COMMAND",
     );
+    const outsideInterpreter = resolve(value.root, "outside-interpreter");
+    copyFileSync(value.interpreter, outsideInterpreter);
+    chmodSync(outsideInterpreter, 0o755);
+    assert.throws(
+      () => createCrgMacosSandboxLaunch({ ...options, interpreterPath: outsideInterpreter }),
+      (error) => error.code === "CODEXLOOPER_CRG_UNSAFE_COMMAND",
+    );
+  });
+});
+
+test("rejects substituted, escaped, altered, and malformed shebang launcher chains", () => {
+  withFixture((value) => {
+    const options = {
+      projectRoot: value.project, runDir: value.run, environmentRoot: value.environment,
+      interpreterPath: value.interpreter, commandPath: value.command,
+      pythonRuntimeRoot: value.pythonRuntimeRoot, sandboxCommand: value.sandbox,
+    };
+    writeFileSync(value.command, "#!/bin/sh\n", { mode: 0o755 });
+    assert.throws(() => createCrgMacosSandboxLaunch(options), /sealed environment Python launcher/);
+    writeFileSync(value.command, "not-a-shebang\n", { mode: 0o755 });
+    assert.throws(() => createCrgMacosSandboxLaunch(options), /bounded absolute shebang/);
+    writeFileSync(value.command, `#!${value.launcher}\n`, { mode: 0o755 });
+    rmSync(value.launcher);
+    assert.throws(() => createCrgMacosSandboxLaunch(options), /readable symlink/);
+    const hop = resolve(value.environment, "bin", "python-hop");
+    symlinkSync(value.interpreter, hop);
+    symlinkSync(hop, value.launcher);
+    assert.throws(() => createCrgMacosSandboxLaunch(options), /directly target the sealed interpreter/);
+    rmSync(value.launcher);
+    const escape = resolve(value.root, "escaped-python");
+    copyFileSync(value.interpreter, escape);
+    chmodSync(escape, 0o755);
+    symlinkSync(escape, value.launcher);
+    assert.throws(() => createCrgMacosSandboxLaunch(options), /directly target the sealed interpreter/);
   });
 });
 

@@ -21,15 +21,16 @@ function fixture() {
   const environment = resolve(root, "environment");
   const bin = resolve(environment, "bin");
   const interpreter = resolve(root, "python");
+  const launcher = resolve(bin, "python3");
   const command = resolve(bin, "code-review-graph");
   mkdirSync(project);
   mkdirSync(run);
   mkdirSync(bin, { recursive: true });
   writeFileSync(interpreter, "interpreter\n");
-  writeFileSync(command, "command\n");
+  writeFileSync(command, `#!${launcher}\n`);
   chmodSync(interpreter, 0o755);
   chmodSync(command, 0o755);
-  symlinkSync(interpreter, resolve(bin, "python3"));
+  symlinkSync(interpreter, launcher);
   return { root, project, run, environment, interpreter, command };
 }
 
@@ -58,7 +59,7 @@ test("captures and verifies the complete sealed CRG environment identity", () =>
 test("rejects changed, added, missing, and mode-changed sealed environment entries", () => {
   for (const mutation of [
     ({ environment }) => writeFileSync(resolve(environment, "added"), "added\n"),
-    ({ command }) => writeFileSync(command, "changed\n"),
+    ({ command, environment }) => writeFileSync(command, `#!${resolve(environment, "bin", "python3")}\n# changed\n`),
     ({ command }) => chmodSync(command, 0o700),
     ({ environment }) => rmSync(resolve(environment, "bin", "python3")),
   ]) {
