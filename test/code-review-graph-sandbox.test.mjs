@@ -109,6 +109,24 @@ test("macOS sysctl-read permits CPython uname and ctypes without network or writ
   assert.equal(allowed.stdout.trim(), "Darwin");
 });
 
+test("macOS sandbox permits SQLite WAL only in the exact CRG data directory", { skip: platform() !== "darwin" }, () => {
+  const root = realpathSync(mkdtempSync(resolve(tmpdir(), "codexlooper-crg-sqlite-")));
+  const data = resolve(root, "data");
+  mkdirSync(data, { mode: 0o700 });
+  try {
+    const profile = [
+      "(version 1)", "(deny default)", "(deny network*)", "(allow process-exec*)", "(allow file-read*)", "(allow sysctl-read)",
+      `(allow file-write* (subpath \"${data}\"))`,
+    ].join("\n");
+    const program = "import sqlite3,sys; p=sys.argv[1]+'/graph.db'; c=sqlite3.connect(p); c.execute('PRAGMA journal_mode=WAL'); c.execute('PRAGMA busy_timeout=5000'); c.execute('create table t(x)'); c.execute('insert into t values (7)'); c.commit(); print(c.execute('select x from t').fetchone()[0]); c.close()";
+    const result = spawnSync("/usr/bin/sandbox-exec", ["-p", profile, "/opt/homebrew/bin/python3", "-c", program, data], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "7");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("rejects command and interpreter substitutions, symlink escapes, and outside runtime roots", () => {
   withFixture((value) => {
     const options = {
