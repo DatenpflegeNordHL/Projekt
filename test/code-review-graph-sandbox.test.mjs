@@ -12,7 +12,9 @@ function fixture() {
   const run = resolve(root, "run");
   const environment = resolve(root, "environment");
   const bin = resolve(environment, "bin");
-  const pythonRuntimeRoot = resolve(root, "uv-python-3.13");
+  const pythonRuntimeParent = resolve(root, "uv-python");
+  const pythonRuntimeRoot = resolve(pythonRuntimeParent, "cpython-3.13.14");
+  const pythonAlias = resolve(pythonRuntimeParent, "cpython-3.13");
   const interpreter = resolve(pythonRuntimeRoot, "bin", "python3.13");
   const launcher = resolve(bin, "python");
   const command = resolve(bin, "code-review-graph");
@@ -23,7 +25,8 @@ function fixture() {
   mkdirSync(resolve(pythonRuntimeRoot, "bin"), { recursive: true });
   copyFileSync("/usr/bin/true", interpreter);
   chmodSync(interpreter, 0o755);
-  symlinkSync(interpreter, launcher);
+  symlinkSync(pythonRuntimeRoot, pythonAlias);
+  symlinkSync(resolve(pythonAlias, "bin", "python3.13"), launcher);
   writeFileSync(command, `#!${launcher}\n`);
   chmodSync(command, 0o755);
   writeFileSync(sandbox, `#!/bin/sh
@@ -33,7 +36,7 @@ case "$2" in
 esac
 `, { mode: 0o755 });
   chmodSync(sandbox, 0o755);
-  return { root, project, run, environment, pythonRuntimeRoot, interpreter, launcher, command, sandbox };
+  return { root, project, run, environment, pythonRuntimeRoot, pythonAlias, interpreter, launcher, command, sandbox };
 }
 
 function withFixture(callback) {
@@ -154,6 +157,19 @@ test("rejects substituted, escaped, altered, and malformed shebang launcher chai
     copyFileSync(value.interpreter, escape);
     chmodSync(escape, 0o755);
     symlinkSync(escape, value.launcher);
+    assert.throws(() => createCrgMacosSandboxLaunch(options), /directly target the sealed interpreter/);
+  });
+});
+
+test("rejects a retargeted uv parent alias", () => {
+  withFixture((value) => {
+    const options = { projectRoot: value.project, runDir: value.run, environmentRoot: value.environment, interpreterPath: value.interpreter, commandPath: value.command, pythonRuntimeRoot: value.pythonRuntimeRoot, sandboxCommand: value.sandbox };
+    const altered = resolve(value.root, "uv-python", "cpython-altered");
+    mkdirSync(resolve(altered, "bin"), { recursive: true });
+    copyFileSync(value.interpreter, resolve(altered, "bin", "python3.13"));
+    chmodSync(resolve(altered, "bin", "python3.13"), 0o755);
+    rmSync(value.pythonAlias);
+    symlinkSync(altered, value.pythonAlias);
     assert.throws(() => createCrgMacosSandboxLaunch(options), /directly target the sealed interpreter/);
   });
 });

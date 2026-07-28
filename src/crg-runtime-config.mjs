@@ -53,7 +53,7 @@ function canonicalPythonRuntimeRoot(path, interpreterPath) {
 }
 
 export function createCrgRuntimeConfig({ environmentRoot, interpreterPath, commandPath, sandboxCommand, pythonRuntimeRoot } = {}) {
-  const environment = captureCrgEnvironmentIdentity({ environmentRoot, interpreterPath, commandPath });
+  const environment = captureCrgEnvironmentIdentity({ environmentRoot, interpreterPath, commandPath, pythonRuntimeRoot });
   const sandbox = canonicalExecutable(sandboxCommand, "CRG sandbox executable");
   const python_runtime_root = canonicalPythonRuntimeRoot(pythonRuntimeRoot, interpreterPath);
   return Object.freeze({
@@ -90,6 +90,7 @@ export function readCrgRuntimeConfig({ configPath, expectedSha256 } = {}) {
     environmentRoot: config.environment?.environment_root,
     interpreterPath: config.environment?.interpreter?.path,
     commandPath: config.environment?.command?.path,
+    pythonRuntimeRoot: config.python_runtime_root?.path,
     manifest: config.environment,
   });
   const pythonRuntimeRoot = canonicalPythonRuntimeRoot(config.python_runtime_root?.path, environment.interpreter.path);

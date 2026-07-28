@@ -80,7 +80,7 @@ test("sealed CRG config fails closed for tampering, permissions, and symlinks", 
     symlinkSync(fixture.pythonRuntimeRoot, linkedRoot);
     assert.throws(
       () => createCrgRuntimeConfig({ environmentRoot: fixture.environment, interpreterPath: join(fixture.pythonRuntimeRoot, "bin", "python3.13"), commandPath: join(fixture.environment, "bin", "crg"), sandboxCommand: join(fixture.root, "sandbox-exec"), pythonRuntimeRoot: linkedRoot }),
-      /canonical non-symlink/,
+      /canonical non-symlink|stay below/,
     );
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });

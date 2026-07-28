@@ -264,7 +264,7 @@ const {
   realpathSync,
   writeFileSync,
 } = await import("node:fs");
-const { basename, isAbsolute, relative, resolve, sep } = await import("node:path");
+const { basename, dirname, isAbsolute, relative, resolve, sep } = await import("node:path");
 const { spawnSync } = await import("node:child_process");
 
 export const CRG_ENVIRONMENT_MANIFEST_SCHEMA = "codexlooper.crg-environment.v2";
@@ -434,7 +434,11 @@ function captureCrgExecutionChain({ root, command, interpreter, pythonRuntimeRoo
   } catch {
     foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG console command shebang launcher target is unavailable");
   }
-  if (targetStat.isSymbolicLink() || !targetStat.isFile() || resolvedTarget !== target || target !== interpreter.path) {
+  const runtimeParent = pythonRuntimeRoot ? dirname(pythonRuntimeRoot) : null;
+  if (
+    targetStat.isSymbolicLink() || !targetStat.isFile() || resolvedTarget !== interpreter.path ||
+    (runtimeParent && !relativeInside(runtimeParent, target))
+  ) {
     foundationFail("CODEXLOOPER_CRG_UNSAFE_COMMAND", "CRG console command shebang launcher must directly target the sealed interpreter");
   }
   if (pythonRuntimeRoot && !relativeInside(pythonRuntimeRoot, resolvedTarget)) {
@@ -446,12 +450,14 @@ function captureCrgExecutionChain({ root, command, interpreter, pythonRuntimeRoo
     launcher_path: launcherPath,
     launcher_mode: launcher.mode & 0o777,
     launcher_link_target: linkTarget,
+    launcher_target_path: target,
+    launcher_target_realpath: resolvedTarget,
     interpreter_path: interpreter.path,
     interpreter_sha256: interpreter.sha256,
   });
 }
 
-export function captureCrgEnvironmentIdentity({ environmentRoot, interpreterPath, commandPath } = {}) {
+export function captureCrgEnvironmentIdentity({ environmentRoot, interpreterPath, commandPath, pythonRuntimeRoot } = {}) {
   const root = canonicalDirectory(environmentRoot, "CRG environment root");
   const interpreter = canonicalRegularFile(interpreterPath, "CRG interpreter");
   const command = canonicalRegularFile(commandPath, "CRG console command", "CODEXLOOPER_CRG_UNSAFE_COMMAND");
@@ -464,17 +470,17 @@ export function captureCrgEnvironmentIdentity({ environmentRoot, interpreterPath
     entries: Object.freeze(inspectEnvironmentEntries(root, interpreter.path).map((entry) => Object.freeze(entry))),
     interpreter: Object.freeze(interpreter),
     command: Object.freeze(command),
-    execution_chain: captureCrgExecutionChain({ root, command, interpreter }),
+    execution_chain: captureCrgExecutionChain({ root, command, interpreter, pythonRuntimeRoot }),
   });
 }
 
-export function verifyCrgEnvironmentIdentity({ environmentRoot, interpreterPath, commandPath, manifest } = {}) {
+export function verifyCrgEnvironmentIdentity({ environmentRoot, interpreterPath, commandPath, pythonRuntimeRoot, manifest } = {}) {
   if (!manifest || typeof manifest !== "object" || manifest.schema !== CRG_ENVIRONMENT_MANIFEST_SCHEMA) {
     foundationFail("CODEXLOOPER_CRG_ENVIRONMENT_INTEGRITY", "CRG environment manifest schema is invalid");
   }
   let actual;
   try {
-    actual = captureCrgEnvironmentIdentity({ environmentRoot, interpreterPath, commandPath });
+    actual = captureCrgEnvironmentIdentity({ environmentRoot, interpreterPath, commandPath, pythonRuntimeRoot });
   } catch (error) {
     if (error?.code === "CODEXLOOPER_CRG_UNSAFE_COMMAND") {
       foundationFail("CODEXLOOPER_CRG_ENVIRONMENT_INTEGRITY", "CRG environment execution chain no longer matches its sealed identity");
@@ -598,8 +604,11 @@ function createCrgMacosSandboxProfile({ paths, environmentRoot, interpreterPath,
       "(deny network*)",
       `(allow process-exec* (literal ${sandboxLiteral(command)}))`,
       `(allow process-exec* (literal ${sandboxLiteral(chain.launcher_path)}))`,
+      `(allow process-exec* (literal ${sandboxLiteral(chain.launcher_target_path)}))`,
       `(allow process-exec* (literal ${sandboxLiteral(interpreter)}))`,
       `(allow file-read* (literal ${sandboxLiteral("/")}))`,
+      `(allow file-read* (subpath ${sandboxLiteral(dirname(chain.launcher_target_path))}))`,
+      `(allow file-read* (subpath ${sandboxLiteral(dirname(dirname(chain.launcher_target_path)))}))`,
       ...readable.map((path) => `(allow file-read* (subpath ${sandboxLiteral(path)}))`),
       `(allow file-write* (subpath ${sandboxLiteral(paths.run_dir)}))`,
       ...(paths.data_dir === paths.run_dir ? [] : [`(allow file-write* (subpath ${sandboxLiteral(paths.data_dir)}))`]),
