@@ -618,10 +618,10 @@ function createCrgMacosSandboxProfile({ paths, environmentRoot, interpreterPath,
   };
 }
 
-function createPinnedCrgArguments({ commandPath, operation, projectRoot, dataDir, baseSha }) {
+function createPinnedCrgArguments({ commandPath, operation, projectRoot, baseSha }) {
   if (operation === "version") return [commandPath, "--version"];
   if (operation === "build") {
-    return [commandPath, "build", "--repo", projectRoot, "--skip-flows", "--data-dir", dataDir];
+    return [commandPath, "build", "--repo", projectRoot, "--skip-flows"];
   }
   if (operation === "detect-changes") {
     if (typeof baseSha !== "string" || !SHA.test(baseSha)) {

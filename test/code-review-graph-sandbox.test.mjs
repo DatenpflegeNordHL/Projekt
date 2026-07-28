@@ -248,9 +248,9 @@ test("allows only the pinned CRG argument arrays", () => {
       "--repo",
       value.project,
       "--skip-flows",
-      "--data-dir",
-      resolve(value.run, "crg-data"),
     ]);
+    assert.equal(build.args.includes("--data-dir"), false);
+    assert.equal(build.env.CRG_DATA_DIR, resolve(value.run, "crg-data"));
     const detect = createCrgMacosSandboxLaunch({ ...options, operation: "detect-changes", baseSha: "a".repeat(40) });
     assert.deepEqual(detect.args.slice(2), [
       value.command,
