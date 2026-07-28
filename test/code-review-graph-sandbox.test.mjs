@@ -71,6 +71,7 @@ test("constructs a pinned static macOS sandbox launch without executing CRG", ()
     assert.match(launch.profile, new RegExp(`process-exec\\* \\(literal "${value.interpreter}"\\)`));
     assert.doesNotMatch(launch.profile, /^\(allow process\*\)$/m);
     assert.match(launch.profile, new RegExp(`file-write\\* \\(subpath "${value.run}"\\)`));
+    assert.match(launch.profile, new RegExp(`file-read\\* \\(subpath "${resolve(value.run, "crg-data")}"\\)`));
     assert.match(launch.profile, /^\(allow file-read\* \(literal "\/"\)\)$/m);
     assert.match(launch.profile, new RegExp(`file-read\\* \\(subpath "${value.pythonRuntimeRoot}"\\)`));
     assert.match(launch.profile_sha256, /^[a-f0-9]{64}$/);
