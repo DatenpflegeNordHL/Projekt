@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -11,6 +12,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -205,9 +207,13 @@ function installFixture(fixture, extra = []) {
 function createCrgFixture(fixture) {
   const root = realpathSync(fixture.root);
   const environment = join(root, "crg-environment");
+  const pythonRuntimeRoot = join(root, "uv-python", "cpython-3.14.6");
   mkdirSync(join(environment, "bin"), { recursive: true });
-  const interpreter = executable(join(environment, "bin", "python"), "#!/bin/sh\nexit 0\n");
-  const command = executable(join(environment, "bin", "crg"), "#!/bin/sh\nexit 0\n");
+  mkdirSync(join(pythonRuntimeRoot, "bin"), { recursive: true });
+  const interpreter = executable(join(pythonRuntimeRoot, "bin", "python3.14"), "#!/bin/sh\nexit 0\n");
+  const launcher = join(environment, "bin", "python");
+  symlinkSync(interpreter, launcher);
+  const command = executable(join(environment, "bin", "crg"), `#!${launcher}\nexit 0\n`);
   const sandbox = executable(join(root, "sandbox-exec"), `#!/bin/sh
 set -eu
 case "$*" in
@@ -216,7 +222,7 @@ case "$*" in
   *) echo 'code-review-graph 2.3.6' ;;
 esac
 `);
-  return ["--crg-environment", environment, "--crg-interpreter", interpreter, "--crg-command", command, "--crg-sandbox", sandbox, "--crg-python-runtime-root", environment];
+  return ["--crg-environment", environment, "--crg-interpreter", interpreter, "--crg-command", command, "--crg-sandbox", sandbox, "--crg-python-runtime-root", pythonRuntimeRoot];
 }
 
 function modelEnv(extra = {}) {
@@ -344,6 +350,22 @@ test("configured CRG is sealed for the runner only and preflight rejects tamperi
     else process.env.CODEXLOOPER_CRG_CONFIG = priorConfig;
     if (priorDigest === undefined) delete process.env.CODEXLOOPER_CRG_CONFIG_SHA256;
     else process.env.CODEXLOOPER_CRG_CONFIG_SHA256 = priorDigest;
+    removeTree(fixture.root);
+  }
+});
+
+test("configured CRG fixture preserves the sealed launcher execution chain", () => {
+  const fixture = createFixture();
+  try {
+    const installed = installFixture(fixture, createCrgFixture(fixture));
+    const config = JSON.parse(readFileSync(join(fixture.project, ".codexlooper", "crg-runtime-config.json"), "utf8"));
+    const chain = config.environment.execution_chain;
+    assert.equal(chain.command_path, config.environment.command.path);
+    assert.equal(chain.launcher_path, join(config.environment.environment_root, "bin", "python"));
+    assert.equal(lstatSync(chain.launcher_path).isSymbolicLink(), true);
+    assert.equal(chain.launcher_target_realpath, config.environment.interpreter.path);
+    assert.equal(installed.crg.status, "configured");
+  } finally {
     removeTree(fixture.root);
   }
 });
