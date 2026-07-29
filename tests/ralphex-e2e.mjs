@@ -42,6 +42,11 @@ try {
 
   writeFileSync(join(project, "AGENTS.md"), "# Agent anchor\nRead ROUTER.md and only relevant context.\n");
   writeFileSync(join(project, "ROUTER.md"), "# Router\nFixture tasks require only the plan.\n");
+  writeFileSync(join(project, "package.json"), `${JSON.stringify({ private: true, scripts: { check: "node fixture-check.mjs" } })}\n`);
+  writeFileSync(
+    join(project, "fixture-check.mjs"),
+    'import { existsSync } from "node:fs";\nif (!existsSync("result.txt")) process.exit(1);\n',
+  );
   writeFileSync(
     join(project, "docs", "plans", "fixture.md"),
     "# Plan: Offline fixture\n\n## Allowed paths\n- `result.txt`\n- `this plan file`\n\n## Validation Commands\n- `test -f result.txt`\n\n### Task 1: Produce result\n- [ ] Create result.txt containing fixture-pass\n",
@@ -50,7 +55,8 @@ try {
   const fakeCodexSource = join(tools, "fake-codex.mjs");
   writeFileSync(
     fakeCodexSource,
-    `import { readFileSync } from "node:fs";
+    `import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 if (process.argv[2] === "--version") { console.log("codex-cli 0.130.0"); process.exit(0); }
 if (!process.env.CLOSEROUTER_API_KEY) process.exit(31);
@@ -65,28 +71,33 @@ let text;
 if (modelArg.includes("gpt-5.6-sol")) {
   if (sandbox !== "read-only") process.exit(35);
   text = "NO ISSUES FOUND";
-} else if (prompt.includes("Read the plan file at")) {
-  if (sandbox !== "read-only" || args.includes("--output-schema")) process.exit(36);
-  const patch = [
-    "diff --git a/result.txt b/result.txt",
-    "new file mode 100644",
-    "--- /dev/null",
-    "+++ b/result.txt",
-    "@@ -0,0 +1 @@",
-    "+fixture-pass",
-    "diff --git a/docs/plans/fixture.md b/docs/plans/fixture.md",
-    "--- a/docs/plans/fixture.md",
-    "+++ b/docs/plans/fixture.md",
-    "@@ -10,2 +10,2 @@",
-    " ### Task 1: Produce result",
-    "-- [ ] Create result.txt containing fixture-pass",
-    "+- [x] Create result.txt containing fixture-pass",
-    "",
-  ].join("\\n");
-  text = JSON.stringify({ patch, signal: "<<<RALPHEX:ALL_TASKS_DONE>>>", overview: "Returned a host-applied patch without writing the snapshot." });
-} else {
+} else if (prompt.includes("<<<RALPHEX:REVIEW_DONE>>>")) {
   if (sandbox !== "read-only") process.exit(37);
-  text = JSON.stringify({ patch: "", signal: "<<<RALPHEX:REVIEW_DONE>>>", overview: "No review findings." });
+  text = "<<<RALPHEX:REVIEW_DONE>>>";
+} else {
+  if (sandbox !== "read-only" || args.includes("--output-schema")) process.exit(36);
+  const plan = readFileSync("docs/plans/fixture.md", "utf8");
+  const oldText = "- [ ] Create result.txt containing fixture-pass";
+  const newText = "- [x] Create result.txt containing fixture-pass";
+  text = JSON.stringify({
+    version: 2,
+    operations: [
+      {
+        type: "create_file",
+        path: "result.txt",
+        content: "fixture-pass\\n",
+        expected_absent: true,
+      },
+      {
+        type: "replace_exact",
+        path: "docs/plans/fixture.md",
+        expected_file_sha256: createHash("sha256").update(plan, "utf8").digest("hex"),
+        old_text: oldText,
+        new_text: newText,
+        expected_occurrences: 1,
+      },
+    ],
+  });
 }
 console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } }));
 console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1000, cached_input_tokens: 400, cache_write_input_tokens: 0, output_tokens: 200, reasoning_output_tokens: 50 } }));
@@ -172,7 +183,8 @@ exit 2
   assert.ok(receipt.usage.profiles.builder.calls >= 1);
   assert.ok(receipt.usage.profiles.reviewer.calls >= 1);
   const hostEvents = readFileSync(join(runDirectory, "host-commits.jsonl"), "utf8");
-  assert.match(hostEvents, /"transport":"structured_patch"/);
+  assert.match(hostEvents, /"transport":"builder_envelope_v2_host_generated_diff"/);
+  assert.doesNotMatch(hostEvents, /"transport":"structured_patch"/);
   assert.match(hostEvents, /"transport":"host_plan_archive"/);
   assert.equal(existsSync(join(runDirectory, "snapshots")), true);
   assert.deepEqual(readdirSync(join(runDirectory, "snapshots")), []);
