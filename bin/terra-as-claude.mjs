@@ -1,20 +1,21 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, isAbsolute, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import {
   recordCodexDiagnosticLine,
   sanitizeCodexDiagnosticLine,
 } from "../src/codex-diagnostics.mjs";
-import { parseBuilderEnvelope } from "../src/builder-envelope.mjs";
+import { parseBuilderOperationEnvelopeV2 } from "../src/builder-envelope.mjs";
 import {
   captureBuilderSnapshotPatch,
   cleanupBuilderSnapshot,
   createBuilderSnapshot,
 } from "../src/builder-snapshot.mjs";
-import { applyBuilderPatch, superviseBuilderChanges } from "../src/git-supervisor.mjs";
+import { applyBuilderOperations } from "../src/git-supervisor.mjs";
 import { prepareProfileLaunch } from "../src/profiles.mjs";
 import { recordCodexUsageLine } from "../src/telemetry.mjs";
 
@@ -22,6 +23,13 @@ const MAX_PROMPT_BYTES = 2_000_000;
 const MAX_STDERR_BYTES = 16_384;
 const MAX_TOOL_DIAGNOSTICS = 20;
 const MAX_TOOL_DIAGNOSTIC_TEXT = 8_000;
+const MAX_REJECTED_RESPONSE_BYTES = 65_536;
+const MAX_RETRY_CONTEXT_BYTES = 4_096;
+const MAX_CANDIDATE_VALIDATION_ARTIFACT_BYTES = 20_000;
+const RETRY_CONTEXT_FILE = "builder-retry-context.json";
+const RETRY_CONTEXT_CONSUMED_FILE = "builder-retry-context-consumed.json";
+const CANDIDATE_VALIDATION_CONTEXT_FILE = "builder-candidate-validation-context.json";
+const CANDIDATE_VALIDATION_CONTEXT_CONSUMED_FILE = "builder-candidate-validation-context-consumed.json";
 
 function fail(message) {
   throw new Error(message);
@@ -97,21 +105,331 @@ function parseLegacySignal(text, phase) {
   };
 }
 
-function parseEnvelopeMessages(messages, phase, snapshotPatch) {
+function parseOperationMessages(messages, phase) {
   let lastError;
+  let rejectedMessage = "";
   for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const legacy = parseLegacySignal(messages[index], phase);
+    if (legacy) return legacy;
     try {
-      return parseBuilderEnvelope(messages[index], phase);
+      return {
+        operations: parseBuilderOperationEnvelopeV2(messages[index]),
+        signal: "",
+        summary: "",
+        raw_payload: messages[index],
+      };
     } catch (error) {
       lastError = error;
-      const legacy = parseLegacySignal(messages[index], phase);
-      if (legacy) return legacy;
+      rejectedMessage = messages[index];
     }
   }
-  if (snapshotPatch.trim()) {
-    return { version: 1, patch: "", signal: "", summary: "", snapshot_fallback: true };
+  const error = lastError || new Error("Codex builder returned no usable agent result");
+  error.rejectedBuilderMessage = rejectedMessage;
+  throw error;
+}
+
+function exactPrivateRunDirectory() {
+  const runDirectory = process.env.CODEXLOOPER_RUN_DIR;
+  const projectRoot = process.env.CODEXLOOPER_PROJECT || process.cwd();
+  if (typeof runDirectory !== "string" || !runDirectory || !isAbsolute(runDirectory)) {
+    fail("Run directory is unavailable for rejected Builder response retention");
   }
-  throw lastError || new Error("Codex builder returned no usable agent result");
+  const runId = basename(runDirectory);
+  if (!runId || runId === "." || runId === "..") {
+    fail("Run directory is invalid for rejected Builder response retention");
+  }
+  const expected = resolve(projectRoot, ".codexlooper", "runs", runId);
+  if (resolve(runDirectory) !== expected) {
+    fail("Run directory is outside the private CodexLooper run path");
+  }
+  return expected;
+}
+
+function retainRejectedBuilderResponse(message, phase, error) {
+  if (typeof message !== "string" || !message.trim()) return null;
+  const redacted = redactDiagnostic(message);
+  const bytes = Buffer.from(redacted, "utf8");
+  const truncated = bytes.length > MAX_REJECTED_RESPONSE_BYTES;
+  const response = truncated
+    ? bytes.subarray(0, MAX_REJECTED_RESPONSE_BYTES).toString("utf8")
+    : redacted;
+  const artifactPath = resolve(
+    exactPrivateRunDirectory(),
+    `builder-rejected-response-${Date.now()}-${process.pid}.json`,
+  );
+  writeFileSync(
+    artifactPath,
+    `${JSON.stringify({
+      schema: "codexlooper.builder-rejected-response.v1",
+      phase,
+      parser_error: redactDiagnostic(error?.message),
+      truncated,
+      response,
+    })}\n`,
+    { encoding: "utf8", mode: 0o600, flag: "wx" },
+  );
+  chmodSync(artifactPath, 0o600);
+  return artifactPath;
+}
+
+function retryContextPath(name) {
+  return resolve(exactPrivateRunDirectory(), name);
+}
+
+function truncateUtf8Tail(value, maximumBytes) {
+  const text = String(value || "");
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= maximumBytes) return { value: text, truncated: false };
+  const marker = "[...truncated...]";
+  const markerBytes = Buffer.from(marker, "utf8");
+  let tail = bytes.subarray(Math.max(0, bytes.length - Math.max(0, maximumBytes - markerBytes.length)));
+  while (tail.length > 0 && (tail[0] & 0xc0) === 0x80) tail = tail.subarray(1);
+  return { value: `${marker}${tail.toString("utf8")}`, truncated: true };
+}
+
+function canonicalPlanContext() {
+  const path = process.env.CODEXLOOPER_CANONICAL_PLAN_PATH;
+  const sha256 = process.env.CODEXLOOPER_CANONICAL_PLAN_SHA256;
+  if (path === undefined && sha256 === undefined) return null;
+  if (
+    typeof path !== "string" ||
+    !/^[A-Za-z0-9._@+/-]+\.md$/u.test(path) ||
+    path.startsWith("/") ||
+    path.split("/").some((part) => !part || part === "." || part === "..") ||
+    typeof sha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(sha256)
+  ) {
+    fail("Canonical single-task plan context is invalid");
+  }
+  let policy;
+  try {
+    policy = JSON.parse(readFileSync(process.env.CODEXLOOPER_RUN_POLICY, "utf8"));
+  } catch {
+    fail("Canonical single-task plan context policy is invalid");
+  }
+  if (
+    policy?.single_task !== true ||
+    policy.original_plan !== path ||
+    policy.original_plan_sha256 !== sha256
+  ) {
+    fail("Canonical single-task plan context does not match the private run policy");
+  }
+  return Object.freeze({ path, sha256 });
+}
+
+function validRetryContext(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const expected = [
+    "category",
+    "failure_code",
+    "operation_index",
+    "operation_type",
+    "path",
+    "reason",
+    "schema",
+  ];
+  if (Object.keys(value).sort().join("\0") !== expected.join("\0")) return null;
+  if (
+    value.schema !== "codexlooper.builder-retry-context.v1" ||
+    value.failure_code !== "CODEXLOOPER_BUILDER_OPERATION_PRECONDITION_FAILED" ||
+    value.category !== "operation_precondition" ||
+    !Number.isSafeInteger(value.operation_index) ||
+    value.operation_index < 0 ||
+    !["create_file", "replace_exact"].includes(value.operation_type) ||
+    typeof value.path !== "string" ||
+    !value.path ||
+    Buffer.byteLength(value.path, "utf8") > 1_024 ||
+    typeof value.reason !== "string" ||
+    !value.reason ||
+    Buffer.byteLength(value.reason, "utf8") > 256
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    failure_code: value.failure_code,
+    category: value.category,
+    operation_index: value.operation_index,
+    operation_type: value.operation_type,
+    path: value.path,
+    reason: value.reason,
+  });
+}
+
+function retainBuilderRetryContext(context) {
+  if (!context) return;
+  const artifactPath = retryContextPath(RETRY_CONTEXT_FILE);
+  const serialized = `${JSON.stringify({
+    schema: "codexlooper.builder-retry-context.v1",
+    ...context,
+  })}\n`;
+  if (Buffer.byteLength(serialized, "utf8") > MAX_RETRY_CONTEXT_BYTES) {
+    fail("Builder retry context exceeds its bounded size");
+  }
+  if (existsSync(retryContextPath(RETRY_CONTEXT_CONSUMED_FILE))) return;
+  writeFileSync(artifactPath, serialized, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  chmodSync(artifactPath, 0o600);
+}
+
+function consumeBuilderRetryContext() {
+  const artifactPath = retryContextPath(RETRY_CONTEXT_FILE);
+  const consumedPath = retryContextPath(RETRY_CONTEXT_CONSUMED_FILE);
+  if (existsSync(consumedPath)) {
+    rmSync(artifactPath, { force: true });
+    return null;
+  }
+  if (!existsSync(artifactPath)) return null;
+  let context;
+  try {
+    const serialized = readFileSync(artifactPath, "utf8");
+    if (Buffer.byteLength(serialized, "utf8") > MAX_RETRY_CONTEXT_BYTES) return null;
+    context = validRetryContext(JSON.parse(serialized));
+  } catch {
+    context = null;
+  }
+  writeFileSync(
+    consumedPath,
+    `${JSON.stringify({ schema: "codexlooper.builder-retry-context-consumed.v1" })}\n`,
+    { encoding: "utf8", mode: 0o600, flag: "wx" },
+  );
+  chmodSync(consumedPath, 0o600);
+  rmSync(artifactPath, { force: true });
+  return context;
+}
+
+function retryContextGuidance(context) {
+  if (!context) return "";
+  return `\n\nTrusted host retry context (re-read the immutable snapshot and return a corrected strict Builder Envelope v2 object):
+- failure_code: ${context.failure_code}
+- category: ${context.category}
+- operation_index: ${context.operation_index}
+- operation_type: ${context.operation_type}
+- path: ${context.path}
+- reason: ${context.reason}`;
+}
+
+function validCandidateValidationContext(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const expected = ["category", "command", "exit_status", "failure_code", "failure_tail", "schema", "truncated"];
+  if (Object.keys(value).sort().join("\0") !== expected.join("\0")) return null;
+  if (
+    value.schema !== "codexlooper.builder-candidate-validation-context.v1" ||
+    value.failure_code !== "CODEXLOOPER_CANDIDATE_FULL_PROJECT_CHECK_FAILED" ||
+    value.category !== "candidate_full_project_validation" ||
+    value.command !== "npm run check" ||
+    !Number.isSafeInteger(value.exit_status) ||
+    value.exit_status === 0 ||
+    typeof value.failure_tail !== "string" ||
+    typeof value.truncated !== "boolean" ||
+    Buffer.byteLength(value.failure_tail, "utf8") > MAX_RETRY_CONTEXT_BYTES
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    failure_code: value.failure_code,
+    category: value.category,
+    command: value.command,
+    exit_status: value.exit_status,
+    failure_tail: redactDiagnostic(value.failure_tail),
+    truncated: value.truncated,
+  });
+}
+
+function boundedCandidateSerialization(context, diagnostic) {
+  let stdout = truncateUtf8Tail(redactDiagnostic(diagnostic.stdout), MAX_CANDIDATE_VALIDATION_ARTIFACT_BYTES).value;
+  let stderr = truncateUtf8Tail(redactDiagnostic(diagnostic.stderr), MAX_CANDIDATE_VALIDATION_ARTIFACT_BYTES).value;
+  let stdoutTruncated = Boolean(diagnostic.stdout_truncated);
+  let stderrTruncated = Boolean(diagnostic.stderr_truncated);
+  const artifactFor = () => ({
+    schema: "codexlooper.builder-candidate-validation.v1",
+    failure_code: context.failure_code,
+    command: context.command,
+    exit_status: context.exit_status,
+    stdout,
+    stderr,
+    stdout_truncated: stdoutTruncated,
+    stderr_truncated: stderrTruncated,
+  });
+  while (Buffer.byteLength(`${JSON.stringify(artifactFor())}\n`, "utf8") > MAX_CANDIDATE_VALIDATION_ARTIFACT_BYTES) {
+    if (Buffer.byteLength(stdout, "utf8") >= Buffer.byteLength(stderr, "utf8")) {
+      const next = truncateUtf8Tail(stdout, Math.max(0, Buffer.byteLength(stdout, "utf8") - 512));
+      stdout = next.value;
+      stdoutTruncated = true;
+    } else {
+      const next = truncateUtf8Tail(stderr, Math.max(0, Buffer.byteLength(stderr, "utf8") - 512));
+      stderr = next.value;
+      stderrTruncated = true;
+    }
+  }
+  let failureTail = redactDiagnostic(context.failure_tail);
+  let contextTruncated = Boolean(context.truncated);
+  const contextFor = () => ({
+    schema: "codexlooper.builder-candidate-validation-context.v1",
+    ...context,
+    failure_tail: failureTail,
+    truncated: contextTruncated,
+  });
+  while (Buffer.byteLength(`${JSON.stringify(contextFor())}\n`, "utf8") > MAX_RETRY_CONTEXT_BYTES) {
+    const next = truncateUtf8Tail(failureTail, Math.max(0, Buffer.byteLength(failureTail, "utf8") - 256));
+    failureTail = next.value;
+    contextTruncated = true;
+  }
+  return {
+    artifact: `${JSON.stringify(artifactFor())}\n`,
+    context: `${JSON.stringify(contextFor())}\n`,
+  };
+}
+
+function retainCandidateValidationContext(context, diagnostic) {
+  if (!context || !diagnostic) return;
+  const runDirectory = exactPrivateRunDirectory();
+  const contextPath = resolve(runDirectory, CANDIDATE_VALIDATION_CONTEXT_FILE);
+  const consumedPath = resolve(runDirectory, CANDIDATE_VALIDATION_CONTEXT_CONSUMED_FILE);
+  if (existsSync(consumedPath)) return;
+  const serialized = boundedCandidateSerialization(context, diagnostic);
+  const artifactPath = resolve(
+    runDirectory,
+    `builder-candidate-validation-${Date.now()}-${process.pid}.json`,
+  );
+  writeFileSync(artifactPath, serialized.artifact, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  chmodSync(artifactPath, 0o600);
+  writeFileSync(contextPath, serialized.context, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  chmodSync(contextPath, 0o600);
+}
+
+function consumeCandidateValidationContext() {
+  const contextPath = retryContextPath(CANDIDATE_VALIDATION_CONTEXT_FILE);
+  const consumedPath = retryContextPath(CANDIDATE_VALIDATION_CONTEXT_CONSUMED_FILE);
+  if (existsSync(consumedPath)) {
+    rmSync(contextPath, { force: true });
+    return null;
+  }
+  if (!existsSync(contextPath)) return null;
+  let context;
+  try {
+    const serialized = readFileSync(contextPath, "utf8");
+    if (Buffer.byteLength(serialized, "utf8") > MAX_RETRY_CONTEXT_BYTES) return null;
+    context = validCandidateValidationContext(JSON.parse(serialized));
+  } catch {
+    context = null;
+  }
+  writeFileSync(
+    consumedPath,
+    `${JSON.stringify({ schema: "codexlooper.builder-candidate-validation-context-consumed.v1" })}\n`,
+    { encoding: "utf8", mode: 0o600, flag: "wx" },
+  );
+  chmodSync(consumedPath, 0o600);
+  rmSync(contextPath, { force: true });
+  return context;
+}
+
+function candidateValidationContextGuidance(context) {
+  if (!context) return "";
+  return `\n\nTrusted host candidate validation retry context (re-read the immutable snapshot and return one corrected strict Builder Envelope v2 object):
+- failure_code: ${context.failure_code}
+- category: ${context.category}
+- command: ${context.command}
+- exit_status: ${context.exit_status}
+- failure_tail: ${context.failure_tail}`;
 }
 
 function planCompleted(projectRoot = process.cwd(), sourceEnv = process.env) {
@@ -127,6 +445,18 @@ function planCompleted(projectRoot = process.cwd(), sourceEnv = process.env) {
     fail("Run policy schema is invalid during completion check");
   }
   const plan = readFileSync(resolve(projectRoot, policy.plan), "utf8");
+  if (policy.single_task !== undefined) {
+    if (
+      policy.single_task !== true ||
+      !Number.isSafeInteger(policy.selected_task) ||
+      policy.selected_task < 1 ||
+      policy.original_plan !== policy.plan ||
+      !/^[a-f0-9]{64}$/.test(policy.selected_task_completed_plan_sha256 || "")
+    ) {
+      fail("Single-task policy metadata is invalid during completion check");
+    }
+    return createHash("sha256").update(plan, "utf8").digest("hex") === policy.selected_task_completed_plan_sha256;
+  }
   return !plan.includes("- [ ]");
 }
 
@@ -138,24 +468,30 @@ function hostSignal({ phase, requestedSignal, committed, effectivePatch }) {
   return committed || effectivePatch.trim() ? "" : "<<<RALPHEX:REVIEW_DONE>>>";
 }
 
-function structuredPatchGuidance(phase) {
-  const phaseSignal =
-    phase === "review"
-      ? "Use REVIEW_DONE only when no issue exists. If you provide a fix patch, use an empty signal."
-      : "Use ALL_TASKS_DONE only when the patch completes every actionable plan item. Otherwise use an empty signal.";
-  return `CodexLooper read-only patch policy:
+function builderEnvelopeV2Guidance(phase, canonicalPlan) {
+  const canonicalPlanGuidance = canonicalPlan
+    ? `\n- Trusted single-task canonical checkbox context: final checkbox replace_exact must target exactly ${canonicalPlan.path} and use exactly expected_file_sha256 ${canonicalPlan.sha256}. Do not derive this hash from private task-N.md, from the snapshot, or by guessing.`
+    : "";
+  return `CodexLooper read-only Builder Envelope v2 policy:
 - You are running inside a disposable read-only clone of the repository. The real project is never writable from this session.
-- Inspect files with read-only shell commands, git status, git diff, and git log. Do not execute commands that create caches, build artifacts, lockfiles, coverage files, or other worktree changes.
+- Inspect files with read-only shell commands, git status, git diff, and git log.
+- The read-only filesystem is intentional. Do not run tests or validation commands inside the model sandbox when they may create temporary files, caches, lockfiles, coverage data, or other writes.
+- Inability to create files or execute write-producing validation inside the snapshot is expected and is not a task blocker. The trusted host performs validation after accepting the patch.
 - Never edit, create, delete, rename, copy, or chmod files. Never run git-mutating commands.
-- Construct the required textual git unified diff directly from the inspected file contents and return it in the patch field. Do not rely on tool-side file changes.
-- Your final response must be one plain JSON object, not markdown. Required fields are patch and signal. Optional fields are version, summary, and overview. No other fields are allowed.
-- patch must be an empty string or a standard textual git unified diff beginning with diff --git lines.
-- signal must be one of: empty string, <<<RALPHEX:ALL_TASKS_DONE>>>, <<<RALPHEX:REVIEW_DONE>>>, or <<<RALPHEX:TASK_FAILED>>> as allowed for the current phase.
-- Use only same-path file additions, deletions, and modifications. Do not emit renames, copies, binary patches, symlinks, submodules, quoted paths, or paths containing whitespace.
-- Every changed path must be permitted by the active plan. For task work, include the plan checkbox update in the patch.
-- The trusted host validates allowed paths, runs git apply --check against the real project, applies the diff, repeats validation commands, and creates the local commit.
-- ${phaseSignal}
-- Use TASK_FAILED only when the task cannot be completed safely; TASK_FAILED requires an empty patch.
+- Your first and only substantive response must be exactly one syntactically valid Builder Envelope v2 JSON object: its first non-whitespace character is { and its final non-whitespace character is }. Do not emit Markdown, prose, comments, control signals, code fences, or trailing material.
+- That root object is {"version":2,"operations":[...]}. Its only top-level fields are version and operations.
+- Every operation discriminator field is exactly type. No aliases, no unknown fields, no omitted required fields, and never use kind as an operation field.
+- A create_file operation has exactly these fields: type, path, content, expected_absent. type is exactly "create_file" and expected_absent is exactly true. Normative accepted V2 shape: {"version":2,"operations":[{"type":"create_file","path":"src/example.mjs","content":"export const example = true;\\n","expected_absent":true}]}.
+- A replace_exact operation has exactly these fields: type, path, expected_file_sha256, old_text, new_text, expected_occurrences. type is exactly "replace_exact"; expected_file_sha256 is a lowercase 64-character SHA-256 digest; old_text is non-empty; expected_occurrences is exactly 1. Normative accepted V2 shape: {"version":2,"operations":[{"type":"replace_exact","path":"src/example.mjs","expected_file_sha256":"0000000000000000000000000000000000000000000000000000000000000000","old_text":"export const example = true;\\n","new_text":"export const example = false;\\n","expected_occurrences":1}]}.
+- All code belongs in JSON string values. Before output, JSON-escape every embedded double quote, backslash, tab, carriage return, and newline.
+- Do not author a Git diff, hunk headers, Apply-Patch markers, or any patch text. Do not run git apply, including git apply --check; the host materializes operations and generates the canonical diff.
+- Re-read every existing replacement target immediately before constructing its expected_file_sha256, old_text, and new_text. The expected_file_sha256 is the lowercase SHA-256 of the complete current UTF-8 file content; old_text must occur exactly once.
+- For every replace_exact, use a distinctive block confirmed to occur exactly once in the immutable snapshot. Never use a short structural anchor such as a bare closing brace, generic return statement, import line, or other fragment likely to recur. Prefer complete current file content for a whole-file replacement; otherwise use a complete named function, class, or block with enough unique surrounding context.
+- Inspect silently. Your first and only substantive agent response must be the strict Builder Envelope v2 JSON object; never emit planning or progress prose.
+- Every changed path must be permitted by the active plan. A valid non-final task envelope may omit a canonical plan checkbox while work remains. Include its exact checkbox change only in the final envelope that completes the task.
+- Do not mark a task checkbox complete unless the operations cover every requirement and required test category for that task. Tests must be authored as create_file or replace_exact operations even though they cannot be executed inside the read-only model snapshot.
+- Never emit Ralphex markers or control signals alongside a Builder Envelope v2 JSON object.
+- The trusted host alone derives continuation and completion from validated operations, canonical plan state, and trusted host commit evidence.${canonicalPlanGuidance}
 - Current phase: ${phase}.`;
 }
 
@@ -179,7 +515,10 @@ try {
 
   const internalReview = prompt.includes("<<<RALPHEX:REVIEW_DONE>>>");
   const phase = internalReview ? "review" : "task";
-  prompt = `${structuredPatchGuidance(phase)}\n\n${reviewGuidance(internalReview)}${prompt}`;
+  const canonicalPlan = canonicalPlanContext();
+  const retryContext = consumeBuilderRetryContext();
+  const candidateValidationContext = consumeCandidateValidationContext();
+  prompt = `${builderEnvelopeV2Guidance(phase, canonicalPlan)}${retryContextGuidance(retryContext)}${candidateValidationContextGuidance(candidateValidationContext)}\n\n${reviewGuidance(internalReview)}${prompt}`;
   snapshot = createBuilderSnapshot();
 
   const launch = prepareProfileLaunch("builder", {
@@ -270,16 +609,50 @@ try {
 
   const snapshotPatch = captureBuilderSnapshotPatch({ snapshot });
   if (snapshotPatch.trim()) fail("Read-only Codex builder modified the isolated snapshot");
-  const envelope = parseEnvelopeMessages(agentMessages, phase, snapshotPatch);
+  let envelope;
+  try {
+    envelope = parseOperationMessages(agentMessages, phase);
+  } catch (error) {
+    retainRejectedBuilderResponse(error.rejectedBuilderMessage, phase, error);
+    throw error;
+  }
   let supervised = { committed: false };
   let effectivePatch = "";
   if (envelope.signal !== "<<<RALPHEX:TASK_FAILED>>>") {
-    effectivePatch = envelope.patch;
-    supervised = effectivePatch.trim()
-      ? applyBuilderPatch({ patch: effectivePatch, phase })
-      : envelope.legacy_worktree
-        ? superviseBuilderChanges({ phase })
+    const runDirectory = process.env.CODEXLOOPER_RUN_DIR;
+    const payloadArtifact =
+      typeof runDirectory === "string" && runDirectory
+        ? resolve(
+            runDirectory,
+            `builder-envelope-${Date.now()}-${process.pid}.json`,
+          )
+        : null;
+
+    if (payloadArtifact && envelope.raw_payload) {
+      writeFileSync(payloadArtifact, envelope.raw_payload, {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+      });
+    }
+
+    try {
+      supervised = envelope.operations
+        ? applyBuilderOperations({ envelope: envelope.operations, phase })
         : { committed: false };
+    } catch (error) {
+      retainCandidateValidationContext(
+        error.candidateValidationContext,
+        error.candidateValidationDiagnostic,
+      );
+      retainBuilderRetryContext(error.builderRetryContext);
+      throw error;
+    }
+    effectivePatch = supervised.canonical_diff || "";
+
+    if (payloadArtifact && supervised.committed) {
+      rmSync(payloadArtifact, { force: true });
+    }
   }
   const signal = hostSignal({
     phase,

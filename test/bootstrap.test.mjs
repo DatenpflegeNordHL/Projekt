@@ -6,13 +6,13 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootstrap } from "../src/bootstrap.mjs";
+import { removeTree } from "./helpers/remove-tree.mjs";
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { encoding: "utf8", ...options });
@@ -52,6 +52,10 @@ function fixture({ customAgents = false } = {}) {
     join(tools, "mex"),
     `#!/bin/sh
 set -eu
+if [ "\${1:-}" = "--version" ]; then
+  echo 'mex 0.6.3'
+  exit 0
+fi
 if [ "\${1:-}" = "setup" ]; then
   mkdir -p .mex/events
   if [ ! -f .mex/events/decisions.jsonl ]; then
@@ -98,9 +102,13 @@ test("bootstraps a clean Git project without replacing existing project files", 
     assert.ok(existsSync(join(current.project, "docs", "plans", "README.md")));
     assert.ok(existsSync(join(current.project, ".mex", "events", "decisions.jsonl")));
     assert.ok(existsSync(result.runCommand));
+    assert.ok(existsSync(result.runtimeManifest));
+    assert.equal(result.receipt.schema, "codexlooper.bootstrap.v2");
     assert.equal(result.receipt.status, "completed");
     assert.equal(result.receipt.project_name, "target-project");
     assert.equal(result.receipt.mex_score, 100);
+    assert.equal(result.receipt.runtime.id, result.runtimeId);
+    assert.equal(result.receipt.budgets.max_builder_calls, 12);
     assert.equal(result.receipt.secret_free, true);
     assert.equal(
       result.receipt.files.find((entry) => entry.path === "AGENTS.md")?.status,
@@ -109,7 +117,7 @@ test("bootstraps a clean Git project without replacing existing project files", 
     const rawReceipt = readFileSync(result.receiptPath, "utf8");
     assert.doesNotMatch(rawReceipt, /CLOSEROUTER_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|GITHUB_TOKEN/);
   } finally {
-    rmSync(current.root, { recursive: true, force: true });
+    removeTree(current.root);
   }
 });
 
@@ -123,8 +131,9 @@ test("bootstrap is idempotent after committing its visible scaffold", () => {
     assert.equal(second.receipt.visible_changes.length, 0);
     assert.ok(second.receipt.files.every((entry) => entry.status === "preserved"));
     assert.equal(second.runCommand, first.runCommand);
+    assert.equal(second.runtimeId, first.runtimeId);
   } finally {
-    rmSync(current.root, { recursive: true, force: true });
+    removeTree(current.root);
   }
 });
 
@@ -138,6 +147,6 @@ test("bootstrap blocks a dirty worktree before writing files", () => {
     );
     assert.equal(existsSync(join(current.project, "ROUTER.md")), false);
   } finally {
-    rmSync(current.root, { recursive: true, force: true });
+    removeTree(current.root);
   }
 });

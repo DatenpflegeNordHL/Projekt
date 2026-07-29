@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 import { ensurePrivateDirectoryChain } from "./runtime-paths.mjs";
+import { validateBuilderOperationEnvelope } from "./builder-operations.mjs";
 
 const MAX_PATCH_BYTES = 2_000_000;
 const MAX_SUMMARY_BYTES = 8_000;
@@ -41,6 +42,175 @@ function jsonCandidate(text) {
   const last = trimmed.lastIndexOf("}");
   if (first >= 0 && last > first) return trimmed.slice(first, last + 1);
   return trimmed;
+}
+
+function jsonWhitespace(character) {
+  return character === " " || character === "\n" || character === "\r" || character === "\t";
+}
+
+function isHex(character) {
+  return (
+    (character >= "0" && character <= "9") ||
+    (character >= "a" && character <= "f") ||
+    (character >= "A" && character <= "F")
+  );
+}
+
+function parseStrictJsonObject(text) {
+  let index = 0;
+
+  function invalid() {
+    fail("CODEXLOOPER_BUILDER_V2_JSON_INVALID", "Builder Envelope v2 must be one strict JSON object");
+  }
+
+  function skipWhitespace() {
+    while (index < text.length && jsonWhitespace(text[index])) index += 1;
+  }
+
+  function consume(character) {
+    if (text[index] !== character) invalid();
+    index += 1;
+  }
+
+  function parseString() {
+    const start = index;
+    consume('"');
+    while (index < text.length) {
+      const character = text[index];
+      if (character === '"') {
+        index += 1;
+        try {
+          return JSON.parse(text.slice(start, index));
+        } catch {
+          invalid();
+        }
+      }
+      if (character < " ") invalid();
+      if (character !== "\\") {
+        index += 1;
+        continue;
+      }
+      index += 1;
+      const escape = text[index];
+      if ('"\\/bfnrt'.includes(escape)) {
+        index += 1;
+        continue;
+      }
+      if (escape !== "u") invalid();
+      index += 1;
+      for (let offset = 0; offset < 4; offset += 1) {
+        if (!isHex(text[index + offset])) invalid();
+      }
+      index += 4;
+    }
+    invalid();
+  }
+
+  function parseNumber() {
+    if (text[index] === "-") index += 1;
+    if (text[index] === "0") {
+      index += 1;
+    } else {
+      if (!(text[index] >= "1" && text[index] <= "9")) invalid();
+      while (text[index] >= "0" && text[index] <= "9") index += 1;
+    }
+    if (text[index] === ".") {
+      index += 1;
+      if (!(text[index] >= "0" && text[index] <= "9")) invalid();
+      while (text[index] >= "0" && text[index] <= "9") index += 1;
+    }
+    if (text[index] === "e" || text[index] === "E") {
+      index += 1;
+      if (text[index] === "+" || text[index] === "-") index += 1;
+      if (!(text[index] >= "0" && text[index] <= "9")) invalid();
+      while (text[index] >= "0" && text[index] <= "9") index += 1;
+    }
+  }
+
+  function parseLiteral(literal) {
+    if (text.slice(index, index + literal.length) !== literal) invalid();
+    index += literal.length;
+  }
+
+  function parseArray() {
+    consume("[");
+    skipWhitespace();
+    if (text[index] === "]") {
+      index += 1;
+      return;
+    }
+    while (true) {
+      parseValue();
+      skipWhitespace();
+      if (text[index] === "]") {
+        index += 1;
+        return;
+      }
+      consume(",");
+      skipWhitespace();
+    }
+  }
+
+  function parseObject() {
+    consume("{");
+    const keys = new Set();
+    skipWhitespace();
+    if (text[index] === "}") {
+      index += 1;
+      return;
+    }
+    while (true) {
+      if (text[index] !== '"') invalid();
+      const key = parseString();
+      if (keys.has(key)) {
+        fail("CODEXLOOPER_BUILDER_V2_JSON_DUPLICATE_KEY", "Builder Envelope v2 contains a duplicate JSON object key");
+      }
+      keys.add(key);
+      skipWhitespace();
+      consume(":");
+      skipWhitespace();
+      parseValue();
+      skipWhitespace();
+      if (text[index] === "}") {
+        index += 1;
+        return;
+      }
+      consume(",");
+      skipWhitespace();
+    }
+  }
+
+  function parseValue() {
+    skipWhitespace();
+    if (text[index] === "{") return parseObject();
+    if (text[index] === "[") return parseArray();
+    if (text[index] === '"') return parseString();
+    if (text[index] === "t") return parseLiteral("true");
+    if (text[index] === "f") return parseLiteral("false");
+    if (text[index] === "n") return parseLiteral("null");
+    return parseNumber();
+  }
+
+  skipWhitespace();
+  if (text[index] !== "{") invalid();
+  parseObject();
+  skipWhitespace();
+  if (index !== text.length) invalid();
+  try {
+    return JSON.parse(text);
+  } catch {
+    invalid();
+  }
+}
+
+export function parseBuilderOperationEnvelopeV2(text) {
+  if (typeof text !== "string" || !text.trim()) {
+    fail("CODEXLOOPER_BUILDER_V2_JSON_INVALID", "Builder Envelope v2 must not be empty");
+  }
+  if (byteLength(text) > MAX_PATCH_BYTES) {
+    fail("CODEXLOOPER_BUILDER_V2_JSON_TOO_LARGE", "Builder Envelope v2 exceeds the bounded size");
+  }
+  return validateBuilderOperationEnvelope(parseStrictJsonObject(text));
 }
 
 export function builderOutputSchema() {
@@ -144,12 +314,13 @@ export function createBuilderOutputSchemaFile({ sourceEnv = process.env, project
   ) {
     fail("CODEXLOOPER_RUN_DIR_INVALID", "CODEXLOOPER_RUN_DIR must be an absolute path");
   }
-  const root = realpathSync(projectRoot);
+  const requestedRoot = resolve(projectRoot);
   const runId = basename(configuredRunDirectory);
-  const expected = resolve(root, ".codexlooper", "runs", runId);
-  if (configuredRunDirectory !== expected) {
+  const requestedExpected = resolve(requestedRoot, ".codexlooper", "runs", runId);
+  if (resolve(configuredRunDirectory) !== requestedExpected) {
     fail("CODEXLOOPER_RUN_DIR_INVALID", "Builder run directory must stay inside .codexlooper/runs");
   }
+  const root = realpathSync(requestedRoot);
   const runDirectory = ensurePrivateDirectoryChain(root, [".codexlooper", "runs", runId]);
   const stat = lstatSync(runDirectory);
   if (stat.isSymbolicLink() || !stat.isDirectory()) {

@@ -22,6 +22,17 @@ const OPTIONAL_ARGUMENTS = new Set([
   "--review-model",
   "--builder-reasoning",
   "--review-reasoning",
+  "--max-builder-calls",
+  "--max-reviewer-calls",
+  "--max-run-seconds",
+  "--max-estimated-cost-usd",
+  "--model-call-reserve-usd",
+  "--max-crg-builds",
+  "--crg-environment",
+  "--crg-interpreter",
+  "--crg-command",
+  "--crg-sandbox",
+  "--crg-python-runtime-root",
 ]);
 const ALLOWED_ARGUMENTS = new Set([...REQUIRED_ARGUMENTS, ...OPTIONAL_ARGUMENTS]);
 const MAX_TOOL_OUTPUT = 12_000;
@@ -301,7 +312,7 @@ export function bootstrap(argv = process.argv.slice(2), { sourceEnv = process.en
   }
   const installed = install(installArgs);
   const receipt = {
-    schema: "codexlooper.bootstrap.v1",
+    schema: "codexlooper.bootstrap.v2",
     status: "completed",
     created_at: now().toISOString(),
     project,
@@ -310,6 +321,14 @@ export function bootstrap(argv = process.argv.slice(2), { sourceEnv = process.en
     visible_changes: changed,
     mex_score: Number.isFinite(Number(mexReport.score)) ? Number(mexReport.score) : null,
     run_command: installed.runCommand,
+    runtime: {
+      id: installed.runtimeId,
+      directory: installed.runtimeDirectory,
+      manifest: installed.runtimeManifest,
+      manifest_sha256: installed.runtimeManifestSha256,
+    },
+    budgets: installed.budgets,
+    crg: installed.crg,
     secret_free: true,
   };
   const receiptPath = writeReceipt(project, receipt);

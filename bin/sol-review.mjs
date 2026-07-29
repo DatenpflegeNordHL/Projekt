@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname } from "node:path";
 import { prepareProfileLaunch } from "../src/profiles.mjs";
 import { recordCodexUsageLine } from "../src/telemetry.mjs";
+import { appendSolAdvisoryPrompt, readPrivateSolAdvisory } from "../src/sol-advisory.mjs";
 
 const MAX_STDERR_BYTES = 16_384;
 
@@ -94,7 +95,10 @@ try {
   if (args.length !== 1) {
     fail("Sol review requires exactly one prompt-file path");
   }
-  const prompt = readRalphexPrompt(args[0]);
+  const prompt = appendSolAdvisoryPrompt(readRalphexPrompt(args[0]), readPrivateSolAdvisory({
+    advisoryPath: process.env.CODEXLOOPER_SOL_ADVISORY_PATH,
+    runDirectory: process.env.CODEXLOOPER_RUN_DIR,
+  }));
 
   const launch = prepareProfileLaunch("reviewer", {
     json: true,
@@ -115,6 +119,6 @@ try {
   const output = parseReviewOutput(result.stdout, launch.metadata);
   process.stdout.write(`${output}\n`);
 } catch (error) {
-  process.stderr.write(`CODEXLOOPER_SOL_BLOCK: ${redactDiagnostic(error.message)}\n`);
-  process.exitCode = 1;
+  process.stderr.write(`CODEXLOOPER_SOL_ADVISORY_UNAVAILABLE: ${redactDiagnostic(error.message)}\n`);
+  process.stdout.write("NO ADVISORY AVAILABLE\n");
 }

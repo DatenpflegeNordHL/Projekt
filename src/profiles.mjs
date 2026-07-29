@@ -4,6 +4,7 @@ import { buildChildEnv, resolveRealCodex } from "./launcher.mjs";
 
 const ALLOWED_REASONING = new Set(["low", "medium", "high"]);
 const ALLOWED_SANDBOXES = new Set(["read-only", "workspace-write"]);
+const STREAM_IDLE_TIMEOUT_MS = 600_000;
 
 function fail(code, message) {
   const error = new Error(message);
@@ -43,7 +44,8 @@ function validateWorkspaceSnapshot(sourceEnv, projectRoot) {
   }
   const snapshot = realpathSync(configuredSnapshot);
   const project = realpathSync(projectRoot);
-  const snapshotsRoot = resolve(runDirectory, "snapshots");
+  const canonicalRunDirectory = realpathSync(runDirectory);
+  const snapshotsRoot = resolve(canonicalRunDirectory, "snapshots");
   const rel = relative(snapshotsRoot, snapshot);
   if (snapshot !== project || !rel || rel.startsWith("..") || isAbsolute(rel)) {
     fail("CODEXLOOPER_SNAPSHOT_REQUIRED", "workspace-write may target only the current isolated snapshot");
@@ -108,7 +110,7 @@ export function prepareProfileLaunch(
     "-c",
     `model_reasoning_effort=${values.reasoning}`,
     "-c",
-    "stream_idle_timeout_ms=3600000",
+    `stream_idle_timeout_ms=${STREAM_IDLE_TIMEOUT_MS}`,
   );
 
   return {

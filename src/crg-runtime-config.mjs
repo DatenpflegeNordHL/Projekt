@@ -1,0 +1,145 @@
+import { createHash } from "node:crypto";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+import { createCrgMacosSandboxLaunch, captureCrgEnvironmentIdentity, verifyCrgEnvironmentIdentity } from "./code-review-graph.mjs";
+import { canonicalExecutable } from "./runtime-integrity.mjs";
+
+export const CRG_RUNTIME_CONFIG_SCHEMA = "codexlooper.crg-runtime-config.v1";
+const SHA256 = /^[a-f0-9]{64}$/u;
+
+function fail(message) {
+  const error = new Error(message);
+  error.code = "CODEXLOOPER_CRG_RUNTIME_CONFIG_INVALID";
+  throw error;
+}
+
+function digest(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function canonicalPrivateConfig(path) {
+  if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0")) fail("CRG config path is invalid");
+  const canonical = realpathSync(path);
+  if (canonical !== path) fail("CRG config path must be canonical");
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o077) !== 0) {
+    fail("CRG config must be a private regular non-symlink file");
+  }
+  return canonical;
+}
+
+function exactKeys(value, keys) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail("CRG config must be an object");
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+    fail("CRG config has unknown or missing fields");
+  }
+}
+
+function inside(root, path) {
+  const value = relative(root, path);
+  return Boolean(value) && !value.startsWith(`..${sep}`) && value !== ".." && !isAbsolute(value);
+}
+
+function canonicalPythonRuntimeRoot(path, interpreterPath) {
+  if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0")) fail("Python runtime root is invalid");
+  const canonical = realpathSync(path);
+  const stat = lstatSync(path);
+  if (canonical !== path || stat.isSymbolicLink() || !stat.isDirectory()) fail("Python runtime root must be a canonical non-symlink directory");
+  const interpreter = canonicalExecutable(interpreterPath, "CRG interpreter");
+  if (!inside(canonical, interpreter.path)) fail("CRG interpreter must stay below the sealed Python runtime root");
+  return Object.freeze({ path: canonical, interpreter_sha256: interpreter.sha256 });
+}
+
+export function createCrgRuntimeConfig({ environmentRoot, interpreterPath, commandPath, sandboxCommand, pythonRuntimeRoot } = {}) {
+  const environment = captureCrgEnvironmentIdentity({ environmentRoot, interpreterPath, commandPath, pythonRuntimeRoot });
+  const sandbox = canonicalExecutable(sandboxCommand, "CRG sandbox executable");
+  const python_runtime_root = canonicalPythonRuntimeRoot(pythonRuntimeRoot, interpreterPath);
+  return Object.freeze({
+    schema: CRG_RUNTIME_CONFIG_SCHEMA,
+    environment,
+    sandbox,
+    python_runtime_root,
+  });
+}
+
+export function serializeCrgRuntimeConfig(config) {
+  exactKeys(config, ["schema", "environment", "sandbox", "python_runtime_root"]);
+  if (config.schema !== CRG_RUNTIME_CONFIG_SCHEMA) fail("CRG config schema is invalid");
+  return `${JSON.stringify(config, null, 2)}\n`;
+}
+
+export function readCrgRuntimeConfig({ configPath, expectedSha256 } = {}) {
+  if (typeof expectedSha256 !== "string" || !SHA256.test(expectedSha256)) fail("CRG config digest is invalid");
+  const path = canonicalPrivateConfig(configPath);
+  const bytes = readFileSync(path);
+  if (digest(bytes) !== expectedSha256) fail("CRG config digest does not match");
+  let config;
+  try {
+    config = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    fail("CRG config is not valid JSON");
+  }
+  exactKeys(config, ["schema", "environment", "sandbox", "python_runtime_root"]);
+  if (config.schema !== CRG_RUNTIME_CONFIG_SCHEMA) fail("CRG config schema is invalid");
+  if (!config.sandbox || typeof config.sandbox !== "object") fail("CRG sandbox identity is invalid");
+  const sandbox = canonicalExecutable(config.sandbox.path, "CRG sandbox executable");
+  if (JSON.stringify(sandbox) !== JSON.stringify(config.sandbox)) fail("CRG sandbox identity does not match");
+  const environment = verifyCrgEnvironmentIdentity({
+    environmentRoot: config.environment?.environment_root,
+    interpreterPath: config.environment?.interpreter?.path,
+    commandPath: config.environment?.command?.path,
+    pythonRuntimeRoot: config.python_runtime_root?.path,
+    manifest: config.environment,
+  });
+  const pythonRuntimeRoot = canonicalPythonRuntimeRoot(config.python_runtime_root?.path, environment.interpreter.path);
+  if (JSON.stringify(pythonRuntimeRoot) !== JSON.stringify(config.python_runtime_root)) fail("Python runtime root identity does not match");
+  return Object.freeze({ path, sha256: expectedSha256, config: Object.freeze({ ...config, environment, sandbox, python_runtime_root: pythonRuntimeRoot }) });
+}
+
+export function optionalCrgRuntimeConfig(sourceEnv = process.env) {
+  const configPath = sourceEnv.CODEXLOOPER_CRG_CONFIG;
+  const configSha256 = sourceEnv.CODEXLOOPER_CRG_CONFIG_SHA256;
+  if (!configPath && !configSha256) return Object.freeze({ status: "unconfigured" });
+  if (!configPath || !configSha256) fail("CRG config binding is incomplete");
+  return Object.freeze({ status: "configured", ...readCrgRuntimeConfig({ configPath, expectedSha256: configSha256 }) });
+}
+
+function sha(value, label) {
+  if (typeof value !== "string" || !/^[a-f0-9]{40}$/u.test(value)) fail(`${label} is invalid`);
+  return value;
+}
+
+export function deriveCrgSandboxIdentity({ configured, projectRoot, runDirectory, runStartSha, currentTrustedHead } = {}) {
+  if (configured?.status !== "configured") return null;
+  const runStart = sha(runStartSha, "Trusted CRG run-start SHA");
+  const currentHead = sha(currentTrustedHead, "Trusted CRG current HEAD");
+  const launch = createCrgMacosSandboxLaunch({
+    projectRoot: resolve(projectRoot),
+    runDir: resolve(runDirectory),
+    environmentRoot: configured.config.environment.environment_root,
+    interpreterPath: configured.config.environment.interpreter.path,
+    commandPath: configured.config.environment.command.path,
+    pythonRuntimeRoot: configured.config.python_runtime_root.path,
+    sandboxCommand: configured.config.sandbox.path,
+    operation: "build",
+    baseSha: runStart,
+  });
+  const identity = {
+    config_sha256: configured.sha256,
+    environment_sha256: digest(JSON.stringify(configured.config.environment)),
+    sandbox_sha256: configured.config.sandbox.sha256,
+    profile_sha256: launch.profile_sha256,
+    run_start_sha: runStart,
+    current_trusted_head: currentHead,
+  };
+  return Object.freeze({ ...identity, launch_sha256: digest(JSON.stringify({ executable: launch.executable, args: launch.args, profile_sha256: launch.profile_sha256, run_start_sha: runStart, current_trusted_head: currentHead })) });
+}
+
+export function verifyCrgSandboxIdentity({ expected, configured, projectRoot, runDirectory, runStartSha, currentTrustedHead } = {}) {
+  if (!expected || typeof expected !== "object") fail("Expected CRG sandbox identity is invalid");
+  const actual = deriveCrgSandboxIdentity({ configured, projectRoot, runDirectory, runStartSha, currentTrustedHead });
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) fail("CRG sandbox identity does not match");
+  return actual;
+}
