@@ -1,6 +1,7 @@
 # CodexLooper Roadmap
 
-Status: **Core CLI complete; WP6 trust hardening active** as of 2026-07-22.
+Status: **Core CLI and trust hardening complete; WP8 Phase A merged; Phase B
+planning only** as of 2026-08-01.
 
 Controlling architecture contract:
 `docs/architecture/CODEXLOOPER_LOOP_TRUST_INVARIANTS.md`
@@ -90,100 +91,72 @@ Hard per-run budgets remain a WP6A requirement.
 - rejected Terra structured patches are preserved privately for diagnostics;
 - full repository regression suite passes.
 
-Evidence includes merged PR #5 and the diagnostic work in draft PR #7.
+Evidence includes merged PR #5; the subsequent trust-hardening work merged in
+PR #7.
 
-## WP6A: Loop trust hardening
+## WP6: Trust hardening and optional advisory CRG context
 
-**BLOCKING, ACTIVE, MUST BE IMPLEMENTED OUTSIDE THE CURRENT LOOP**
+**MERGED**
 
-Specification:
-`docs/architecture/WP6A_LOOP_TRUST_HARDENING.md`
+PR #7 merged the trust-hardening series, including immutable runtime and
+preflight controls, host-controlled validation and commit boundaries, and an
+optional, default-disabled advisory CRG context for Sol. PR #8 subsequently
+repaired post-merge CI fixtures without relaxing production validation.
 
-Required outcomes:
+CRG remains optional and advisory. It is not a prerequisite for normal
+CodexLooper operation, and this repository does not claim a general productive
+benefit from it. The earlier WP8 Phase-A review had `PARTIAL` CRG coverage
+because its then-unversioned files were not fully indexed.
 
-- content-addressed immutable runtime per bootstrap;
-- generated wrappers execute copied runtime files, never mutable repository code;
-- runtime manifest and preflight hash verification;
-- fixed branch authority before every host mutation and at finalization;
-- monotonic Git ancestry checks;
-- CodexLooper-enforced builder, reviewer, duration and cost budgets;
-- bounded Ralphex task iteration default;
-- receipts record runtime, branch and budget evidence without secrets;
-- independent tests and review before Runtime A is trusted.
-
-The current autonomous loop must not implement and approve this trust-root
-replacement itself.
-
-## WP6B: Read-only Code Review Graph integration
-
-**BLOCKED BY WP6A**
-
-Design-stage specification:
-`docs/planning/WP6B_READONLY_CODE_REVIEW_GRAPH_INTEGRATION.md`
-
-The specification is intentionally outside `docs/plans/` and therefore cannot be
-executed by CodexLooper. After WP6A passes and immutable Runtime A is bootstrapped,
-an exact reviewed copy may be promoted into `docs/plans/`.
-
-Required outcomes:
-
-- original external Code Review Graph v2.3.6 executable;
-- upstream release commit `935695f800f2b02e71aae6d463f3df65f0c6493e`;
-- no CRG MCP, installer, hooks, embeddings, cloud or write-capable tools;
-- private graph data per run;
-- exact version, executable and path validation;
-- strict bounded advisory projection for Sol instead of raw CRG output;
-- official no-change output normalization;
-- fail-open Sol review for valid CRG runtime failures;
-- graph cache keyed by CRG version, run-start SHA and current trusted HEAD;
-- deterministic process, output, storage and build-count ceilings.
-
-## WP6C: Isolated live CRG smoke
-
-**BLOCKED BY WP6B**
-
-Runtime B, installed from the reviewed WP6B candidate, must prove in an isolated
-fixture repository:
-
-- successful private build and detect path;
-- exact no-change handling;
-- strict advisory projection;
-- CRG failure does not suppress Sol;
-- branch switching is blocked;
-- active-runtime tampering is blocked;
-- no residual CRG process;
-- no credential in child environment, report, logs or receipt;
-- all CI and receipt gates pass.
-
-No live CRG claim may be made before WP6C passes.
+The unverified live-CRG/sandbox boundary remains a known limitation; no live
+smoke or general sandbox claim is made here.
 
 ## WP7: Dashboard
 
 **OPTIONAL, DEFERRED**
 
 The CLI and JSON receipts remain the supported interface. A desktop or web
-dashboard is a future product layer and is not required for loop correctness.
+dashboard is a future product idea and is unrelated to the WP6 trust-hardening
+work.
 
-## Fixed execution sequence
+## Current controlled roadmap
 
-1. Implement WP6A outside the current autonomous loop.
-2. Run tests, GitHub CI and independent review.
-3. Bootstrap immutable Runtime A from the reviewed WP6A commit.
-4. Promote the reviewed WP6B plan into `docs/plans/`.
-5. Execute WP6B with Runtime A.
-6. Run tests, CI and independent review.
-7. Bootstrap candidate Runtime B.
-8. Execute WP6C in an isolated fixture.
-9. Obtain explicit human merge authorisation.
-10. Merge and bootstrap Runtime C from `main`.
+1. **#9 Benchmark-Epic**
+   - Phase A: **complete**, merged by PR #17 at
+     `922bf2e0d3c66b647cfa71d4e3955084eb3a6240`.
+   - Independent verdict: `PASS`; WP8 tests: `25/25`; full suite: `212/212`.
+   - Phase B: **planning active only**.
+   - Phase C: blocked.
+   - Phase D: blocked.
+2. **#10** Read-only analysis mode.
+3. **#11** Project adapters.
+4. **#12** Local run and analysis report.
+5. **#13** Compatibility checking.
+6. **#15** Deterministic review pipeline.
+7. **#16** Controlled skills, hooks and memory.
 
-No later success waives an earlier gate.
+For Phase B, only inventory and planning are authorised. Implementation may
+start only after a versioned plan and an independent plan review return `PASS`.
+No real model or agent benchmark run may start before Gate B passes.
+
+## Current execution sequence
+
+```text
+Phase-B inventory
+→ versioned Phase-B plan
+→ independent plan review
+→ bounded implementation sprint
+→ independent code review
+→ tests and separate commit
+```
+
+No later roadmap item may begin before its predecessor has a usable, independently
+reviewed minimum state.
 
 ## Current supported workflow
 
-Until WP6A completes, the existing core CLI remains supported for bounded plans
-that do not modify the active CodexLooper trust root. Do not use it to modify and
-approve its own runner, Terra adapter, Sol reviewer or Git supervisor.
+The hardened local CLI remains supported for bounded plans. External actions and
+optional CRG advisory context remain separately authorised and controlled.
 
 ## Deliberate safety limits
 
