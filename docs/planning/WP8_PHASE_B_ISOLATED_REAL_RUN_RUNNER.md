@@ -263,24 +263,31 @@ exactly `schema`, `track`, `fixtures`, `variant`, `runtime`,
 `replication.retry_index`, and `ordering.sequence_index`. A changed included
 byte requires a new configuration cell.
 
-Compatibility vector A is the complete JSON object above with `logic-bug`,
-`controlled_parity`, `direct-codex-cli`, one allowlist record, and every
-digest placeholder replaced by 64 `a` characters. Expected pinned digests:
-`configuration_sha256=<PIN_B1A_VECTOR_A_CONFIG_SHA256>`,
-`configuration_cell_sha256=<PIN_B1A_VECTOR_A_CELL_SHA256>`,
-`variant_identity_sha256=<PIN_B1A_VECTOR_A_VARIANT_SHA256>`, and
-`runtime_allowlist_sha256=<PIN_B1A_VECTOR_A_ALLOWLIST_SHA256>`.
+Compatibility vectors use the exact RFC 8785 bytes of the literal objects
+below. `canonical_config_utf8_sha256` is SHA-256 of those bytes without a
+domain prefix. `configuration_sha256` is the domain-separated full-config
+digest in the preceding rule. They are calculated once here and B1a copies,
+but does not regenerate, these fixed expected values.
 
-Compatibility vector B is the same complete object with `native_workflow`,
-`codexlooper-terra-sol`, `warm`, `cell-private-cache.v1`, and every digest
-placeholder replaced by 64 `b` characters. Expected pinned digests:
-`configuration_sha256=<PIN_B1A_VECTOR_B_CONFIG_SHA256>`,
-`configuration_cell_sha256=<PIN_B1A_VECTOR_B_CELL_SHA256>`,
-`variant_identity_sha256=<PIN_B1A_VECTOR_B_VARIANT_SHA256>`, and
-`runtime_allowlist_sha256=<PIN_B1A_VECTOR_B_ALLOWLIST_SHA256>`.
+Vector A (`controlled_parity`, direct Codex, cold) is this complete object:
 
-B1a calculates these values from this grammar and commits fixed expected
-SHA-256 values in tests. Planning placeholders are never accepted by a parser.
+~~~json
+{"schema":"codexlooper.real-run-config.v1","track":"controlled_parity","fixtures":[{"id":"logic-bug","version":1,"input_sha256":"4444444444444444444444444444444444444444444444444444444444444444"}],"variant":{"id":"direct-codex-cli","adapter_id":"direct-codex-cli.v1","adapter_sha256":"2ca26bbd142c240a263ea0c9a94e15ff1266422c882a7da69e4cda482a0d61a7","executable_path":"/opt/codex/bin/codex","executable_sha256":"5555555555555555555555555555555555555555555555555555555555555555","version":"1.0.0","configuration_sha256":"8de2e677d62cd84edb228c0d5588d3d4cd9da60a388fc05c8d0fd6951f7fb887","runtime_allowlist_sha256":"2f13cc7517006824a947832da0c8537f286b568745f728add4121d5c8b29c1c8"},"runtime":{"platform":"darwin","architecture":"arm64","node_version":"v24.0.0","node_executable_sha256":"6666666666666666666666666666666666666666666666666666666666666666","isolation_provider_id":"macos-seatbelt.v1","isolation_profile_sha256":"7777777777777777777777777777777777777777777777777777777777777777","allowlist":[{"path":"/opt/codex/bin/codex","sha256":"5555555555555555555555555555555555555555555555555555555555555555","mode":493,"role":"executable"}]},"credential_policy":{"id":"direct-codex-openai-env.v1","type":"openai_api_key","required":true,"injection_channel":"child_environment","allowed_environment_key":"OPENAI_API_KEY"},"replication":{"group":"cp-a","repetition_index":1,"repetition_count":1,"attempt_index":1,"retry_index":0},"ordering":{"seed":"0123456789abcdef0123456789abcdef","sequence_index":1,"sequence_count":1},"cache":{"state":"cold","policy_id":"no-cache.v1"},"workspace":{"fresh":true,"storage_limit_bytes":10485760},"budgets":{"wall_time_ms":60000,"termination_grace_ms":2000,"model_calls":1,"retry_limit":0,"input_tokens":100000,"output_tokens":100000,"reasoning_tokens":100000,"cost_amount":1000000,"cost_currency":"USD","artifact_limit_bytes":10485760},"telemetry":{"allowed_sources":["harness_observed","tool_observed"],"pricing_snapshot_sha256":"8888888888888888888888888888888888888888888888888888888888888888"},"evidence":{"policy_id":"private-evidence.v1"},"results":{"policy_id":"public-result.v2"},"cleanup":{"policy_id":"strict-cleanup.v1"}}
+~~~
+
+`canonical_config_utf8_sha256=d1d7ddfd48480b05250741c8b5190cdcc7df806cb7edea4760bbf70e95c02a04`; `runtime_allowlist_sha256=2f13cc7517006824a947832da0c8537f286b568745f728add4121d5c8b29c1c8`; `adapter_configuration_sha256=8de2e677d62cd84edb228c0d5588d3d4cd9da60a388fc05c8d0fd6951f7fb887`; `variant_identity_sha256=fef6ed8a8c49e48d2325bee551618673fb7fdbfde3bc5faff4843caad068c0f9`; `configuration_sha256=8b90d3a8a4594b2ad4617b6549a34c5c1de99cd3713ad61e5d4c3b29cf7284e3`; `configuration_cell_sha256=f94e0b461c500c52fb2ffb5e32e90a0db7e2321b09e77a137162955584b79362`.
+
+Vector B (`native_workflow`, CodexLooper, warm) is this complete object:
+
+~~~json
+{"schema":"codexlooper.real-run-config.v1","track":"native_workflow","fixtures":[{"id":"logic-bug","version":1,"input_sha256":"4444444444444444444444444444444444444444444444444444444444444444"}],"variant":{"id":"codexlooper-terra-sol","adapter_id":"codexlooper-terra-sol.v1","adapter_sha256":"8a57fe79b79742dd743b9187bb2d21fa7ad63aafdb747fef137c5ba82fafc89e","executable_path":"/opt/codexlooper/bin/runner","executable_sha256":"5555555555555555555555555555555555555555555555555555555555555555","version":"1.0.0","configuration_sha256":"f0b9db40ec8acef8a9f19bfdc9631cf423f283eb5929f79ef393ef6a7a32107f","runtime_allowlist_sha256":"411e804a7bf862e98c8f968a766e4cf4726be17b0f879b26392f0d0de9b7e498"},"runtime":{"platform":"darwin","architecture":"arm64","node_version":"v24.0.0","node_executable_sha256":"6666666666666666666666666666666666666666666666666666666666666666","isolation_provider_id":"macos-seatbelt.v1","isolation_profile_sha256":"7777777777777777777777777777777777777777777777777777777777777777","allowlist":[{"path":"/opt/codexlooper/bin/runner","sha256":"5555555555555555555555555555555555555555555555555555555555555555","mode":493,"role":"executable"},{"path":"/opt/codexlooper/runtime","sha256":"9999999999999999999999999999999999999999999999999999999999999999","mode":493,"role":"runtime"}]},"credential_policy":{"id":"codexlooper-closerouter-env.v1","type":"closerouter_api_key","required":true,"injection_channel":"child_environment","allowed_environment_key":"CLOSEROUTER_API_KEY"},"replication":{"group":"nw-b","repetition_index":1,"repetition_count":2,"attempt_index":1,"retry_index":0},"ordering":{"seed":"fedcba9876543210fedcba9876543210","sequence_index":1,"sequence_count":2},"cache":{"state":"warm","policy_id":"cell-private-cache.v1"},"workspace":{"fresh":true,"storage_limit_bytes":10485760},"budgets":{"wall_time_ms":60000,"termination_grace_ms":2000,"model_calls":2,"retry_limit":0,"input_tokens":100000,"output_tokens":100000,"reasoning_tokens":100000,"cost_amount":1000000,"cost_currency":"USD","artifact_limit_bytes":10485760},"telemetry":{"allowed_sources":["harness_observed","tool_observed"],"pricing_snapshot_sha256":"8888888888888888888888888888888888888888888888888888888888888888"},"evidence":{"policy_id":"private-evidence.v1"},"results":{"policy_id":"public-result.v2"},"cleanup":{"policy_id":"strict-cleanup.v1"}}
+~~~
+
+`canonical_config_utf8_sha256=3cdf059666c642e0d17c75dbf28aeef1a972389ffb5b66cd6456d1af8be0fe8c`; `runtime_allowlist_sha256=411e804a7bf862e98c8f968a766e4cf4726be17b0f879b26392f0d0de9b7e498`; `adapter_configuration_sha256=f0b9db40ec8acef8a9f19bfdc9631cf423f283eb5929f79ef393ef6a7a32107f`; `variant_identity_sha256=e272c3bc244d354dbc6b661c1923f268863cc154f8477a6c8a8cd3ba6c702f65`; `configuration_sha256=cdb77efea042e43de8714c5fa6ab2cba347319df5afde5cba1d8692e912bfd9b`; `configuration_cell_sha256=7aa8f727bfd3ba33f55b17d15e2381d59e936cd38d99d6057451b81e827bc363`.
+
+The changed track, adapter, allowlist, cache policy, replication count, and
+budget cell yield different cell digests. Planning placeholders are never
+accepted by a parser.
 
 ## Adapter contracts
 
@@ -505,26 +512,26 @@ them; no automatic conversion or implicit default exists. v2 has test state
 | credential policy mismatch | credential | no | blocked | not_started | not_run | not_applicable | policy evidence | no |
 | missing credential | credential | no | blocked | not_started | not_run | not_applicable | missing-handle evidence | no |
 | candidate start failure | launch | no | blocked | not_started | not_run | unavailable | launch error | transient_tool_start only |
-| ordinary non-zero exit | execution | yes | failed | completed | executed_nonzero | valid or unavailable | exit plus group proof | no |
+| ordinary non-zero exit | execution | yes | failed | completed | executed_nonzero | unavailable | exit plus group proof | no |
 | timeout | execution | yes | failed | timed_out | not_run | unavailable | timeout plus group proof | no |
 | SIGTERM ignored, then group empty | termination | yes | failed | timed_out | not_run | unavailable | signal receipts plus group proof | no |
 | descendant remains | termination | yes | invalid | timed_out | not_run | invalid | failed termination proof | no |
-| unauthorized file | snapshot | yes | invalid | completed | not_run | valid or unavailable | delta | no |
+| unauthorized file | snapshot | yes | invalid | completed | not_run | unavailable | delta | no |
 | hidden-verifier access attempt | enforcement | yes | invalid | interrupted | not_run | invalid | sandbox denial | no |
-| public-check modification | snapshot | yes | invalid | completed | not_run | valid or unavailable | public-check identity plus delta | no |
+| public-check modification | snapshot | yes | invalid | completed | not_run | unavailable | public-check identity plus delta | no |
 | malformed telemetry | telemetry | yes | invalid | completed | not_run | invalid | event rejection | no |
 | successful verifier with optional telemetry absent | telemetry | yes | passed | completed | executed_zero | unavailable | host terminal plus verifier | no |
 | duplicate terminal event | telemetry | yes | invalid | completed | not_run | invalid | duplicate event | no |
 | missing terminal event | telemetry | yes | invalid | completed | not_run | invalid | sequence evidence | no |
 | pricing drift | telemetry | yes | invalid | completed | not_run | invalid | snapshot identity | no |
-| artifact overflow | finalisation | yes | invalid | completed | executed_zero | valid or unavailable | overflow staging | no |
-| interrupted result write | finalisation | yes | invalid | completed | executed_zero | valid or unavailable | recovery evidence | no |
+| artifact overflow | finalisation | yes | invalid | completed | executed_zero | unavailable | overflow staging | no |
+| interrupted result write | finalisation | yes | invalid | completed | executed_zero | unavailable | recovery evidence | no |
 | private evidence missing | finalisation | yes | invalid | completed | executed_zero | invalid | evidence manifest | no |
-| cleanup failure | cleanup | yes | invalid | completed | executed_zero | valid or unavailable | cleanup attestation | no |
+| cleanup failure | cleanup | yes | invalid | completed | executed_zero | unavailable | cleanup attestation | no |
 | credential redaction failure | evidence | yes | invalid | completed | executed_zero | invalid | redaction scan | no |
 
 Passed requires zero hidden verifier, identities, proved isolation, group-empty
-termination, valid or optional-unavailable telemetry, complete evidence, and
+termination, telemetry statuses allowed by the bound telemetry policy, complete evidence, and
 complete cleanup. Failed is only an intact started ordinary candidate outcome.
 Blocked is only a missing precondition before start. Invalid is any integrity,
 isolation, evidence, telemetry, artifact, or cleanup proof failure.
@@ -603,7 +610,7 @@ Ordering sorts fixture and variant IDs by raw UTF-8 bytes, hashes
 then applies cyclic Latin rotation: repetition r begins at
 `(r - 1) mod variant_count` and visits each variant once; fixtures use the
 digest-sorted list. Sequence index is one-based; sequence count equals fixture
-count times variant count times repetition count. B1a pins two schedule vectors.
+count times variant count times repetition count. B1c pins two schedule vectors.
 
 Cold exposes no cache root. Warm exposes only
 `private_root/cells/<configuration-cell-sha256>/cache`, mode 0700, host owned,
@@ -679,7 +686,236 @@ hidden verifiers, reference repairs, v1 semantics, runtime trust root, provider
 credential handling, existing receipts, branch authority, or live-smoke
 authorisation.
 
-## Selected decisions and remaining proof
+## Second planning revision — complete proof contracts
+
+This section is authoritative where it is more specific than an earlier
+section. The plan status remains **Planning draft — not executable,
+implementation not authorised**. Original review: `CHANGES_REQUIRED`, 5 P1,
+5 P2. First re-review: `CHANGES_REQUIRED`, 4 P1, 6 P2.
+
+### Adapter configuration and source identity
+
+All adapter configuration objects are ordinary data, UTF-8 RFC 8785 JSON,
+exact-key, secret-free, and reject unknown keys. Their digest is SHA-256 of
+`<schema>\0` followed by their canonical JSON bytes. Each binds its `track`,
+matching source manifest digest, executable identity, and credential-policy ID.
+The direct schema `codexlooper.adapter-config.direct-codex.v1` has exactly
+`schema,track,adapter_id,entrypoint_path,entrypoint_sha256,executable_path,
+executable_sha256,version_command,expected_version,model_identity,
+approval_policy,sandbox_mode,working_directory_policy,stdin_policy,
+output_policy,telemetry_policy,credential_policy_id`; strings are ASCII 1–256
+bytes except absolute canonical non-symlink paths (1–4096), hashes are 64 lower
+hex, and `version_command` is exactly `[executable_path,"--version"]`.
+`approval_policy=never`, `sandbox_mode=workspace-write`, and the policies are
+the exact IDs named in the direct adapter row.
+
+`codexlooper.adapter-config.codexlooper.v1` has exactly
+`schema,track,adapter_id,builder_profile,reviewer_profile,terra_model_identity,
+sol_model_identity,closerouter_endpoint_identity,closerouter_non_secret_config,
+builder_budget,reviewer_budget,overall_budget,selected_task_policy,
+runtime_manifest_sha256,receipt_policy_id,terminal_event_policy`. Profiles and
+policy IDs are ASCII 1–128; models are exact `openai/gpt-5.6-terra` and
+`openai/gpt-5.6-sol`; endpoint config is an exact-key object
+`base_url,protocol` of 1–256-byte non-secret strings; each budget is exact-key
+`model_calls,token_limit`, integers 0–10000 and 0–1000000000; overall limits
+are at least each component limit.
+
+`codexlooper.adapter-config.ralphex-unhardened.v1` has exactly
+`schema,track,adapter_id,executable_path,executable_sha256,expected_version,
+task_brief_sha256,renderer_identity_sha256,ini_sha256,credential_policy_id,
+output_policy,telemetry_policy`. Its authoritative input is JSON, never an
+unbound hand-written INI. The deterministic renderer emits UTF-8, LF only,
+sections `[ralphex]`, `[task]`, `[output]` in that order; keys in raw-UTF-8
+lexicographic order; `key=value\n`; no comments, blank lines, or other spaces;
+one final LF. Its configuration digest is SHA-256 of
+`codexlooper.adapter-config.ralphex-unhardened.v1\0 || canonical-json ||
+renderer_identity_sha256-as-32-bytes || rendered-ini-bytes`.
+
+`codexlooper.adapter-source-manifest.v1` has exactly `schema,adapter_id,
+adapter_version,entrypoint,source_files,generated_files,renderer_identity_sha256,
+manifest_sha256`; files have exactly `path,mode,sha256`, paths are safe relative
+1–4096-byte paths sorted by raw UTF-8, mode is 0–511, and hashes are 64 lower
+hex. `generated_files` uses the same schema and is empty except the deterministic
+Ralphex INI renderer output. Symlinks and unknown, absent, or extra files are an
+identity mismatch. `adapter_sha256` is SHA-256 of
+`codexlooper.adapter-source-manifest.v1\0 || canonical manifest without
+manifest_sha256`; configuration/source mismatch is blocked before launch.
+
+### IsolationProvider evidence and real-run gate
+
+All records below are exact-key ordinary-data, canonical JSON, secret-free, and
+have their named SHA-256 domain prefix over the record without its final digest.
+IDs are ASCII 1–64, hashes 64 lower hex, paths canonical absolute 1–4096, arrays
+dense and bounded 0–128. `codexlooper.isolation-capability.v1` retains the
+earlier exact fields; all mandatory requested boundaries must be `proved`.
+`codexlooper.isolation-prepared-launch.v1` has exactly `schema,provider_id,
+provider_version,capability_record_sha256,profile_sha256,root_binding_sha256,
+run_id,configuration_cell_sha256,executable_path,argv,cwd,environment_keys,
+read_roots,write_roots,network_policy,process_policy,prepared_launch_sha256`.
+`argv` is 1–64 UTF-8 arguments of 0–16384 bytes, environment contains names only,
+and roots are sorted canonical paths.
+
+`codexlooper.isolation-preparation-evidence.v1` has exactly `schema,run_id,
+provider_id,provider_executable_sha256,capability_record_sha256,
+prepared_launch_sha256,profile_sha256,root_binding_sha256,
+validated_executable_sha256,validated_runtime_paths_sha256,real_run_eligible,
+checks,evidence_sha256`; each check is exact-key `id,status`, IDs are ASCII
+1–64 and status is `proved,failed,unsupported,unavailable,test_fake_only`.
+`codexlooper.isolation-termination-evidence.v1` has exactly `schema,run_id,
+provider_id,prepared_launch_sha256,leader_identity,process_group_identity,
+known_descendants,signals,polls,leader_reaped,all_known_descendants_absent,
+process_group_empty,observation_complete,termination_status,evidence_sha256`.
+Identities are exact-key `pid,start_tvsec,start_tvusec`; signals are exact-key
+`signal,monotonic_ms,delivery_status`; polls are exact-key `monotonic_ms,
+snapshot_sha256,matching_members,unknown_group_members,zombies` and max 256.
+`codexlooper.isolation-cleanup-evidence.v1` has exactly `schema,run_id,
+provider_id,prepared_launch_sha256,workspace_removed,staging_removed,
+unexpected_paths,remaining_processes,remaining_process_group,retention_applied,
+cleanup_status,evidence_sha256`.
+
+A host starts a candidate only when capability eligibility is true; provider IDs,
+capability digest, profile digest, root-binding digest, cell digest, and provider
+executable identity all match; every mandatory check is `proved`; no mandatory
+check is `test_fake_only`; and preparation evidence is complete. Any failure is
+`outcome.status=blocked`, `candidate_started=false`. `fake-isolation.v1` always
+returns `real_run_eligible=false`; the consumer cannot override it.
+
+### Concrete macOS process observation
+
+Local SDK headers expose `libproc`, `proc_listallpids`, `proc_listpids`,
+`proc_pidinfo`, `PROC_PIDTBSDINFO`, and `proc_bsdinfo`; the chosen future host
+helper therefore uses those APIs, `waitpid`, and `killpg`. A snapshot enumerates
+all PIDs with `proc_listallpids`, reads `PROC_PIDTBSDINFO`, and records PID,
+PPID, PGID, state, `pbi_start_tvsec`, and `pbi_start_tvusec`. Identity is
+`pid,start_tvsec,start_tvusec`; same PID with another start time is new. Known
+descendants remain known after PPID/PGID changes. An unknown matching-PGID member,
+an escaped known descendant, unavailable snapshot, or identity mismatch is
+`invalid`. `killpg` success is only signal delivery. Leader and direct host
+children are reaped with `waitpid`; zombies remain present until reaped.
+
+The monotonic poll interval is 25 ms; after SIGTERM it polls until the configured
+grace deadline, then SIGKILL, then at most 5000 ms. Group emptiness requires
+three consecutive complete empty snapshots, at least 25 ms apart. PGID reuse is
+rejected by identity comparison. Fake `ready,child_spawned,sigterm_received,
+leader_exited,child_exited` handshakes control test setup only; Gate B requires
+matching independent host snapshots. If this helper is not implemented and
+proven, `macos-seatbelt.v1.real_run_eligible=false`; there is no best-effort run.
+
+### Events, usage, evidence files, and deterministic ordering
+
+Each `codexlooper.real-run-event.v1` has exactly `schema,run_id,attempt_index,
+source,source_instance_id,sequence,event_id,event_type,monotonic_offset_ms,
+payload,payload_sha256,event_sha256`. Payload is a bounded ordinary-data
+discriminated union: `candidate_started`=`workspace_sha256`; `model_call_started`
+=`call_id,model_identity`; `model_call_completed`=`call_id,exit_kind`;
+`tool_usage_observed,provider_usage_observed,receipt_usage_observed`=
+`input_tokens,cache_tokens,output_tokens,reasoning_tokens`; `candidate_terminal`
+=`exit_code,signal`; `telemetry_terminal`=`complete`; `candidate_timeout`=
+`deadline_monotonic_ms`; `candidate_signal`=`signal`; `candidate_exit`=`exit_code`.
+All identifiers are ASCII 1–64, token payloads are exact-key metrics
+`value,status,source,evidence_sha256`. `payload_sha256` hashes canonical payload
+bytes with `codexlooper.real-run-event-payload.v1\0`; `event_sha256` hashes the
+event without itself using `codexlooper.real-run-event.v1\0`.
+
+The only metric statuses are `observed,unavailable,invalid,not_applicable`.
+Observed has a non-negative integer and evidence; unavailable/invalid/not-applicable
+have null value; source is present only for observed. An observed zero is `0` plus
+evidence, never a synthetic default. `codexlooper.telemetry-policy.v1` states for
+each source/event/metric whether it is required or optional; every status-matrix
+row references this policy and therefore uses exactly one status per metric.
+
+Parents are component-by-component `lstat` checked: canonical, under bound root,
+non-symlink, host UID owned, and not group/world writable. Private staging opens
+with `O_CREAT|O_EXCL|O_WRONLY|O_NOFOLLOW`, mode 0600, then `fstat` requires a
+regular single-link host-owned file and expected mode. Publication is exclusive
+staging open → bounded write → fsync → close → fstat/lstat reconciliation →
+exclusive target check → same-filesystem atomic rename → final lstat/fstat →
+parent fsync. Public files stage private then receive fixed public mode. Missing
+`O_NOFOLLOW`, atomic rename, or ownership proof blocks; no fallback exists.
+Manifest entries are exact-key `logical_id,relative_path,kind,size_bytes,mode,
+owner_policy,sha256,retention_class,created_monotonic_ms,source_evidence_sha256`:
+ASCII IDs 1–64, safe paths 1–1024, kind/retention/owner policy ASCII 1–64, size
+0–1073741824, mode 0–511, time 0–3600000, hashes 64 lower hex.
+
+Ordering uses `configuration_cell_sha256`, not a cell ID. Within each track,
+fixtures sort by `fixture_identity_sha256`, cells by cell digest, variants by
+variant digest; ties use full digest bytes. For each fixture and N-variant block,
+SHA-256 input is `codexlooper.ordering.v1\0 || seed_bytes(16) || fixture_digest
+bytes(32) || block_index_u32be`; first eight bytes are unsigned big-endian,
+`base_offset=value mod N`, and repetition r uses `(base_offset+r) mod N`.
+One variant always has offset zero; incomplete final blocks use their existing
+members only. Each position is stored. Cold/warm cache roots remain cell-bound.
+Schedule vector S1: seed `00000000000000000000000000000000`, fixture `ff…ff`,
+variants `11…11,22…22`, block hash
+`d99da12d0920f1d0489f784a42dcf7815c1b2a45963bd5ed4c0ea99e6d1a1b3d`,
+orders repetitions 1/2 as `11…11,22…22` then `22…22,11…11`. S2: seed
+`0123456789abcdef0123456789abcdef`, fixture `ee…ee`, the same variants, block
+hash `a905f4209b774b9683bcc99f8b22df8ef5d2e3b5c0af37541a9e616522740518`,
+has the same expected two positions. (`11…11` and `ff…ff` mean 64 repetitions.)
+
+### B1a/B1b/B1c and Gate B
+
+B1a remains config and variant identity only. B1b remains result v2 only. B1c is
+after independent B1b review and changes only `benchmarks/real-run/schedule.v1.mjs`
+and `test/real-run-schedule.test.mjs`; it implements ordering parsing, seed
+validation, positions, and S1/S2, with no process, adapter, credential,
+telemetry, artifact, or model work. Only after independent B1c review may adapter
+or runner work start.
+
+The Gate-B matrix is expanded by this mandatory row format: `ID | Scenario |
+Planned test file | Fixture/fake path | Platform | Location | Precondition |
+Provider | started | status | termination | public fields | private evidence |
+observation | failure assertion | flake control | blocking`. GB-01..23 use,
+respectively, complete paths under `test/real-run-gate-b-{success,process,
+isolation,telemetry,evidence,ordering,credential}.test.mjs` and fixtures under
+`test/fixtures/real-run/`. Every row names one of: `fake-isolation.v1,
+contract-only,false`; `macos-seatbelt.v1,local-Gate-B`; `none,blocked`; or
+`provider-mismatch,blocked`. Every row asserts `outcome.status,
+termination.kind,termination.signal,usage.input_tokens.status,cleanup.status,
+configuration_cell_sha256,variant_identity_sha256`; names the applicable
+preparation/termination/event/manifest/cleanup schema; uses its named handshake
+plus host observation; and asserts the stated invalid/blocked/failed result.
+GB-01 success, GB-02 nonzero, GB-03 timeout, GB-04 ignored SIGTERM, GB-05
+descendant, GB-06 unauthorized write, GB-07 symlink, GB-08 protected path,
+GB-09 environment, GB-10 hidden verifier, GB-11 public check, GB-12 malformed
+telemetry, GB-13 conflict, GB-14 duplicate terminal, GB-15 missing terminal,
+GB-16 identity drift, GB-17 pricing drift, GB-18 missing provider, GB-19 cleanup,
+GB-20 write interruption, GB-21 track mixing, GB-22 schedule, and GB-23
+credential leak are all blocking. macOS rows run local and macOS CI; missing real
+provider is blocked, never skipped.
+
+The following exact table replaces the shorthand matrix above. `PF` means the
+seven public fields `outcome.status,termination.kind,termination.signal,
+usage.input_tokens.status,cleanup.status,configuration_cell_sha256,
+variant_identity_sha256`; each cell spells out its evidence rather than inheriting
+it from another row.
+
+| ID | Scenario | Planned test file | Fixture or fake executable | Platform | Execution location | Required precondition | Bound isolation provider | Expected candidate_started | Expected outcome.status | Expected termination | Required public result fields | Required private evidence | Deterministic observation method | Failure assertion | Flake control | Gate-B blocking |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| GB-01 | success | `test/real-run-gate-b-success.test.mjs` | `test/fixtures/real-run/success.mjs` | portable | CI | valid config | fake provider, contract-only, false | true | passed | completed | PF | event.v1, cleanup-attestation.v1 | ready/terminal handshake | any mismatch fails | handshake | yes |
+| GB-02 | nonzero | `test/real-run-gate-b-success.test.mjs` | `test/fixtures/real-run/nonzero.mjs` | portable | CI | valid config | fake provider, contract-only, false | true | failed | completed | PF | termination-evidence.v1 | fixed exit 7 | wrong status fails | fixed code | yes |
+| GB-03 | timeout | `test/real-run-gate-b-process.test.mjs` | `test/fixtures/real-run/blocking.mjs` | portable | CI | started fake | fake provider, contract-only, false | true | failed | timed_out | PF | termination-evidence.v1 | ready plus monotonic clock | no timeout fails | bounded clock | yes |
+| GB-04 | ignored TERM | `test/real-run-gate-b-process.test.mjs` | `test/fixtures/real-run/ignore-term.mjs` | portable | CI | child ready | fake provider, contract-only, false | true | failed | timed_out | PF | termination-evidence.v1 | signal handshake plus snapshot | no KILL fails | no PID sleep | yes |
+| GB-05 | descendant | `test/real-run-gate-b-process.test.mjs` | `test/fixtures/real-run/descendant.mjs` | portable | CI | child spawned | fake provider, contract-only, false | true | invalid | timed_out | PF | termination-evidence.v1 | child handshake plus snapshot | not invalid fails | bounded polls | yes |
+| GB-06 | write | `test/real-run-gate-b-isolation.test.mjs` | `test/fixtures/real-run/writer.mjs` | portable | CI | sealed snapshot | fake provider, contract-only, false | true | invalid | completed | PF | evidence-manifest.v1 | fixed forbidden path | pass fails | fixed probe | yes |
+| GB-07 | symlink | `test/real-run-gate-b-isolation.test.mjs` | `test/fixtures/real-run/symlink.mjs` | portable | CI | sealed root | fake provider, contract-only, false | true | invalid | interrupted | PF | preparation-evidence.v1 | fixed symlink | pass fails | fixed path | yes |
+| GB-08 | protected path | `test/real-run-gate-b-isolation.test.mjs` | `test/fixtures/real-run/reader.mjs` | macOS | local and CI | provider proved | real macOS provider, local Gate-B proof | true | invalid | interrupted | PF | preparation-evidence.v1 | Seatbelt denial | no denial fails | real denial | yes |
+| GB-09 | environment | `test/real-run-gate-b-isolation.test.mjs` | `test/fixtures/real-run/env-dump.mjs` | portable | CI | dummy secret | fake provider, contract-only, false | true | invalid | completed | PF | event.v1 | fixed JSON dump | missing invalid fails | sentinel | yes |
+| GB-10 | verifier read | `test/real-run-gate-b-isolation.test.mjs` | `test/fixtures/real-run/reader.mjs` | macOS | local and CI | provider proved | real macOS provider, local Gate-B proof | true | invalid | interrupted | PF | preparation-evidence.v1 | Seatbelt denial | no denial fails | real denial | yes |
+| GB-11 | check edit | `test/real-run-gate-b-isolation.test.mjs` | `test/fixtures/real-run/modifier.mjs` | portable | CI | sealed check | fake provider, contract-only, false | true | invalid | completed | PF | evidence-manifest.v1 | fixed edit | pass fails | fixed bytes | yes |
+| GB-12 | malformed event | `test/real-run-gate-b-telemetry.test.mjs` | `test/fixtures/real-run/malformed-event.mjs` | portable | CI | valid start | fake provider, contract-only, false | true | invalid | completed | PF | event.v1 | fixed bytes | accepted event fails | fixed bytes | yes |
+| GB-13 | token conflict | `test/real-run-gate-b-telemetry.test.mjs` | `test/fixtures/real-run/conflict-events.mjs` | portable | CI | two sources | fake provider, contract-only, false | true | invalid | completed | PF | event.v1 | fixed sequence | no conflict fails | fixed order | yes |
+| GB-14 | two terminals | `test/real-run-gate-b-telemetry.test.mjs` | `test/fixtures/real-run/duplicate-terminal.mjs` | portable | CI | valid start | fake provider, contract-only, false | true | invalid | completed | PF | event.v1 | fixed sequence | accepted duplicate fails | fixed events | yes |
+| GB-15 | no terminal | `test/real-run-gate-b-telemetry.test.mjs` | `test/fixtures/real-run/early-exit.mjs` | portable | CI | ready pipe | fake provider, contract-only, false | true | invalid | completed | PF | event.v1 | close after ready | pass fails | handshake | yes |
+| GB-16 | drift | `test/real-run-gate-b-success.test.mjs` | `test/fixtures/real-run/substituted-record.mjs` | portable | CI | pinned identity | no provider, expected blocked | false | blocked | not_started | PF | preparation-evidence.v1 | digest compare | started fails | fixed digests | yes |
+| GB-17 | pricing | `test/real-run-gate-b-telemetry.test.mjs` | `test/fixtures/real-run/pricing-drift.mjs` | portable | CI | snapshot pair | fake provider, contract-only, false | true | invalid | completed | PF | event.v1 | fixed snapshots | accepted drift fails | fixed pair | yes |
+| GB-18 | no provider | `test/real-run-gate-b-isolation.test.mjs` | `test/fixtures/real-run/no-provider.mjs` | portable | CI | provider absent | no provider, expected blocked | false | blocked | not_started | PF | capability.v1 | no spawn assertion | started fails | no process | yes |
+| GB-19 | cleanup | `test/real-run-gate-b-evidence.test.mjs` | `test/fixtures/real-run/retained-path.mjs` | portable | CI | private root | fake provider, contract-only, false | true | invalid | completed | PF | cleanup-attestation.v1 | fixed retained path | complete fails | fixed path | yes |
+| GB-20 | write interruption | `test/real-run-gate-b-evidence.test.mjs` | `test/fixtures/real-run/bounded-writer.mjs` | portable | CI | staging root | fake provider, contract-only, false | true | invalid | completed | PF | evidence-manifest.v1 | injected boundary | pass fails | injected boundary | yes |
+| GB-21 | track mix | `test/real-run-gate-b-ordering.test.mjs` | `test/fixtures/real-run/mixed-track.json` | portable | CI | mixed records | no provider, expected blocked | false | blocked | not_started | PF | config rejection | canonical parse | started fails | fixed vector | yes |
+| GB-22 | ordering | `test/real-run-gate-b-ordering.test.mjs` | `test/fixtures/real-run/schedule-vector.json` | portable | CI | S1/S2 | no provider, expected blocked | false | invalid | not_started | PF | schedule manifest | fixed vectors | mismatch fails | fixed digests | yes |
+| GB-23 | secret leak | `test/real-run-gate-b-credential.test.mjs` | `test/fixtures/real-run/dummy-secret.mjs` | portable | CI | sentinel credential | fake provider, contract-only, false | true | invalid | completed | PF | redaction evidence, cleanup-attestation.v1 | sentinel scan | no invalid fails | sentinel | yes |
+
 
 | Decision | Options | Repository evidence | Selected option | Remaining proof | Blocking status |
 | --- | --- | --- | --- | --- | --- |
@@ -702,15 +938,16 @@ authorise implementation, credentials, real adapters, or real model runs.
 
 ## Independent review finding closure
 
-| Finding | Plan section added or changed | Decision | Implementation impact | Review status |
-| --- | --- | --- | --- | --- |
-| P1-01 | Configuration and digests | complete grammar | B1a parser/vectors | addressed in planning revision; independent re-review required |
-| P1-02 | Adapter contracts | exact family/track contracts | B2 adapters/fakes | addressed in planning revision; independent re-review required |
-| P1-03 | IsolationProvider | capability/profile model | B3 provider | addressed in planning revision; independent re-review required |
-| P1-04 | Credential policy | child-environment-only | B2/B3 tests | addressed in planning revision; independent re-review required |
-| P1-05 | Process-tree proof | identity-bound termination | B3 lifecycle | addressed in planning revision; independent re-review required |
-| P2-01 | Events/telemetry/pricing | precedence/snapshots | B4 telemetry | addressed in planning revision; independent re-review required |
-| P2-02 | Result strategy/matrix | separate v2 | B1b parser | addressed in planning revision; independent re-review required |
-| P2-03 | Evidence/cleanup | manifests/retention | B4 artifacts | addressed in planning revision; independent re-review required |
-| P2-04 | Retry/order/cache | fixed state machine | B1a/B4 scheduling | addressed in planning revision; independent re-review required |
-| P2-05 | Gate-B matrix | deterministic proof cases | B5 proof suite | addressed in planning revision; independent re-review required |
+| Finding | Plan section | Concrete decision | Compatibility or proof artifact | Implementation sprint | Revision status |
+| --- | --- | --- | --- | --- | --- |
+| P1-01 | Canonicalisation | literal valid vectors | vectors A/B and fixed digests | B1a | addressed in second planning revision; independent re-review required |
+| P1-02 | Adapter configuration | config and source manifests | canonical config/INI/manifest digests | B2 | addressed in second planning revision; independent re-review required |
+| P1-03 | IsolationProvider | exact evidence records and gate | capability/preparation/termination/cleanup records | B3 | addressed in second planning revision; independent re-review required |
+| P1-04 | Credential policy | child-environment-only | dummy secret and descendant leak proof | B2/B3 | addressed in second planning revision; independent re-review required |
+| P1-05 | Process observation | libproc snapshots, waitpid, killpg | three-empty-snapshot termination evidence | B3 | addressed in second planning revision; independent re-review required |
+| P2-01 | Events and telemetry | typed payload union | payload/event digests and policy | B4 | addressed in second planning revision; independent re-review required |
+| P2-02 | Result v2 | four metric statuses only | per-row telemetry policy | B1b | addressed in second planning revision; independent re-review required |
+| P2-03 | Evidence operations | exclusive no-follow staging | manifest entry and cleanup evidence | B4 | addressed in second planning revision; independent re-review required |
+| P2-04 | Ordering and cache | defined seeded rotation | S1/S2 schedule vectors | B1c | addressed in second planning revision; independent re-review required |
+| P2-05 | Gate-B matrix | explicit binding columns | named test/fake/evidence matrix | B5 | addressed in second planning revision; independent re-review required |
+| P2-N01 | Sprint ordering | schedule removed from B1a | separate B1c scope | B1c | addressed in second planning revision; independent re-review required |
