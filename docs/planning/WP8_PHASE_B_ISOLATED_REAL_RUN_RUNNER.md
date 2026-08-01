@@ -255,13 +255,12 @@ derived `runtime_allowlist_sha256`.
 
 `configuration_cell_sha256` is SHA-256 of
 `codexlooper.real-run-configuration-cell.v1\0` followed by canonical JSON of
-exactly `schema`, `track`, `fixtures`, `variant`, `runtime`,
-`credential_policy`, `replication.group`, `replication.repetition_count`,
-`ordering.seed`, `ordering.sequence_count`, `cache`, `workspace`, `budgets`,
-`telemetry`, `evidence`, `results`, and `cleanup`. It excludes only
-`replication.repetition_index`, `replication.attempt_index`,
-`replication.retry_index`, and `ordering.sequence_index`. A changed included
-byte requires a new configuration cell.
+the explicit projection `Cell(config)`: `{schema,track,fixtures,variant,runtime,
+credential_policy,replication:{group,repetition_count},ordering:{seed,
+sequence_count},cache,workspace,budgets,telemetry,evidence,results,cleanup}`.
+It excludes only `replication.repetition_index`, `replication.attempt_index`,
+`replication.retry_index`, and `ordering.sequence_index`; it never flattens a
+child field to its parent object. A changed included byte requires a new cell.
 
 Compatibility vectors use the exact RFC 8785 bytes of the literal objects
 below. `canonical_config_utf8_sha256` is SHA-256 of those bytes without a
@@ -272,18 +271,18 @@ but does not regenerate, these fixed expected values.
 Vector A (`controlled_parity`, direct Codex, cold) is this complete object:
 
 ~~~json
-{"schema":"codexlooper.real-run-config.v1","track":"controlled_parity","fixtures":[{"id":"logic-bug","version":1,"input_sha256":"4444444444444444444444444444444444444444444444444444444444444444"}],"variant":{"id":"direct-codex-cli","adapter_id":"direct-codex-cli.v1","adapter_sha256":"2ca26bbd142c240a263ea0c9a94e15ff1266422c882a7da69e4cda482a0d61a7","executable_path":"/opt/codex/bin/codex","executable_sha256":"5555555555555555555555555555555555555555555555555555555555555555","version":"1.0.0","configuration_sha256":"8de2e677d62cd84edb228c0d5588d3d4cd9da60a388fc05c8d0fd6951f7fb887","runtime_allowlist_sha256":"2f13cc7517006824a947832da0c8537f286b568745f728add4121d5c8b29c1c8"},"runtime":{"platform":"darwin","architecture":"arm64","node_version":"v24.0.0","node_executable_sha256":"6666666666666666666666666666666666666666666666666666666666666666","isolation_provider_id":"macos-seatbelt.v1","isolation_profile_sha256":"7777777777777777777777777777777777777777777777777777777777777777","allowlist":[{"path":"/opt/codex/bin/codex","sha256":"5555555555555555555555555555555555555555555555555555555555555555","mode":493,"role":"executable"}]},"credential_policy":{"id":"direct-codex-openai-env.v1","type":"openai_api_key","required":true,"injection_channel":"child_environment","allowed_environment_key":"OPENAI_API_KEY"},"replication":{"group":"cp-a","repetition_index":1,"repetition_count":1,"attempt_index":1,"retry_index":0},"ordering":{"seed":"0123456789abcdef0123456789abcdef","sequence_index":1,"sequence_count":1},"cache":{"state":"cold","policy_id":"no-cache.v1"},"workspace":{"fresh":true,"storage_limit_bytes":10485760},"budgets":{"wall_time_ms":60000,"termination_grace_ms":2000,"model_calls":1,"retry_limit":0,"input_tokens":100000,"output_tokens":100000,"reasoning_tokens":100000,"cost_amount":1000000,"cost_currency":"USD","artifact_limit_bytes":10485760},"telemetry":{"allowed_sources":["harness_observed","tool_observed"],"pricing_snapshot_sha256":"8888888888888888888888888888888888888888888888888888888888888888"},"evidence":{"policy_id":"private-evidence.v1"},"results":{"policy_id":"public-result.v2"},"cleanup":{"policy_id":"strict-cleanup.v1"}}
+{"schema":"codexlooper.real-run-config.v1","track":"controlled_parity","fixtures":[{"id":"logic-bug","version":1,"input_sha256":"d09b6055a6b9ba1291b7e1514ed82c8a1c61888584161c8b0e019f89a682e7fd"}],"variant":{"id":"direct-codex-cli","adapter_id":"direct-codex-cli.v1","adapter_sha256":"8e481ab4696325995cc9a618e2bd36d23f54de89d85cc9f2a836444b37a943c0","executable_path":"/opt/codex/bin/codex","executable_sha256":"5555555555555555555555555555555555555555555555555555555555555555","version":"1.0.0","configuration_sha256":"88aa134a850d5169d8348e4a919b0efb279231077dd5ed1fb2ce47243c2f0f46","runtime_allowlist_sha256":"2f13cc7517006824a947832da0c8537f286b568745f728add4121d5c8b29c1c8"},"runtime":{"platform":"darwin","architecture":"arm64","node_version":"v24.0.0","node_executable_sha256":"6666666666666666666666666666666666666666666666666666666666666666","isolation_provider_id":"macos-seatbelt.v1","isolation_profile_sha256":"7777777777777777777777777777777777777777777777777777777777777777","allowlist":[{"path":"/opt/codex/bin/codex","sha256":"5555555555555555555555555555555555555555555555555555555555555555","mode":493,"role":"executable"}]},"credential_policy":{"id":"direct-codex-openai-env.v1","type":"openai_api_key","required":true,"injection_channel":"child_environment","allowed_environment_key":"OPENAI_API_KEY"},"replication":{"group":"cp-a","repetition_index":1,"repetition_count":1,"attempt_index":1,"retry_index":0},"ordering":{"seed":"0123456789abcdef0123456789abcdef","sequence_index":1,"sequence_count":1},"cache":{"state":"cold","policy_id":"no-cache.v1"},"workspace":{"fresh":true,"storage_limit_bytes":10485760},"budgets":{"wall_time_ms":60000,"termination_grace_ms":2000,"model_calls":1,"retry_limit":0,"input_tokens":100000,"output_tokens":100000,"reasoning_tokens":100000,"cost_amount":1000000,"cost_currency":"USD","artifact_limit_bytes":10485760},"telemetry":{"allowed_sources":["harness_observed","tool_observed"],"pricing_snapshot_sha256":"8888888888888888888888888888888888888888888888888888888888888888"},"evidence":{"policy_id":"private-evidence.v1"},"results":{"policy_id":"public-result.v2"},"cleanup":{"policy_id":"strict-cleanup.v1"}}
 ~~~
 
-`canonical_config_utf8_sha256=d1d7ddfd48480b05250741c8b5190cdcc7df806cb7edea4760bbf70e95c02a04`; `runtime_allowlist_sha256=2f13cc7517006824a947832da0c8537f286b568745f728add4121d5c8b29c1c8`; `adapter_configuration_sha256=8de2e677d62cd84edb228c0d5588d3d4cd9da60a388fc05c8d0fd6951f7fb887`; `variant_identity_sha256=fef6ed8a8c49e48d2325bee551618673fb7fdbfde3bc5faff4843caad068c0f9`; `configuration_sha256=8b90d3a8a4594b2ad4617b6549a34c5c1de99cd3713ad61e5d4c3b29cf7284e3`; `configuration_cell_sha256=f94e0b461c500c52fb2ffb5e32e90a0db7e2321b09e77a137162955584b79362`.
+`canonical_config_utf8_sha256=52e12d579971f99242b12409bb1d3437f47f7a65c63ea0d4a9aebbffa7f7c703`; `runtime_allowlist_sha256=2f13cc7517006824a947832da0c8537f286b568745f728add4121d5c8b29c1c8`; `adapter_configuration_sha256=88aa134a850d5169d8348e4a919b0efb279231077dd5ed1fb2ce47243c2f0f46`; `variant_identity_sha256=6b116eca9548dd4b7e4b6d7eec2dc7965c0220f39aafe90bca878eae570f8015`; `configuration_sha256=acc71f809a275f611090664bf60245359a282a09e79bb640d5962d104320476b`; `configuration_cell_sha256=feda7770d64bb701768bc9e2bf4b3457b1d903867282527a660a43b5cf10c4ac`.
 
 Vector B (`native_workflow`, CodexLooper, warm) is this complete object:
 
 ~~~json
-{"schema":"codexlooper.real-run-config.v1","track":"native_workflow","fixtures":[{"id":"logic-bug","version":1,"input_sha256":"4444444444444444444444444444444444444444444444444444444444444444"}],"variant":{"id":"codexlooper-terra-sol","adapter_id":"codexlooper-terra-sol.v1","adapter_sha256":"8a57fe79b79742dd743b9187bb2d21fa7ad63aafdb747fef137c5ba82fafc89e","executable_path":"/opt/codexlooper/bin/runner","executable_sha256":"5555555555555555555555555555555555555555555555555555555555555555","version":"1.0.0","configuration_sha256":"f0b9db40ec8acef8a9f19bfdc9631cf423f283eb5929f79ef393ef6a7a32107f","runtime_allowlist_sha256":"411e804a7bf862e98c8f968a766e4cf4726be17b0f879b26392f0d0de9b7e498"},"runtime":{"platform":"darwin","architecture":"arm64","node_version":"v24.0.0","node_executable_sha256":"6666666666666666666666666666666666666666666666666666666666666666","isolation_provider_id":"macos-seatbelt.v1","isolation_profile_sha256":"7777777777777777777777777777777777777777777777777777777777777777","allowlist":[{"path":"/opt/codexlooper/bin/runner","sha256":"5555555555555555555555555555555555555555555555555555555555555555","mode":493,"role":"executable"},{"path":"/opt/codexlooper/runtime","sha256":"9999999999999999999999999999999999999999999999999999999999999999","mode":493,"role":"runtime"}]},"credential_policy":{"id":"codexlooper-closerouter-env.v1","type":"closerouter_api_key","required":true,"injection_channel":"child_environment","allowed_environment_key":"CLOSEROUTER_API_KEY"},"replication":{"group":"nw-b","repetition_index":1,"repetition_count":2,"attempt_index":1,"retry_index":0},"ordering":{"seed":"fedcba9876543210fedcba9876543210","sequence_index":1,"sequence_count":2},"cache":{"state":"warm","policy_id":"cell-private-cache.v1"},"workspace":{"fresh":true,"storage_limit_bytes":10485760},"budgets":{"wall_time_ms":60000,"termination_grace_ms":2000,"model_calls":2,"retry_limit":0,"input_tokens":100000,"output_tokens":100000,"reasoning_tokens":100000,"cost_amount":1000000,"cost_currency":"USD","artifact_limit_bytes":10485760},"telemetry":{"allowed_sources":["harness_observed","tool_observed"],"pricing_snapshot_sha256":"8888888888888888888888888888888888888888888888888888888888888888"},"evidence":{"policy_id":"private-evidence.v1"},"results":{"policy_id":"public-result.v2"},"cleanup":{"policy_id":"strict-cleanup.v1"}}
+{"schema":"codexlooper.real-run-config.v1","track":"native_workflow","fixtures":[{"id":"logic-bug","version":1,"input_sha256":"d09b6055a6b9ba1291b7e1514ed82c8a1c61888584161c8b0e019f89a682e7fd"}],"variant":{"id":"codexlooper-terra-sol","adapter_id":"codexlooper-terra-sol.v1","adapter_sha256":"327c4bad8bbb488aa8c0609145fd8eb42ff0e5485bf166f4e01ffec205d8c2ce","executable_path":"/opt/codexlooper/bin/runner","executable_sha256":"5555555555555555555555555555555555555555555555555555555555555555","version":"1.0.0","configuration_sha256":"e58bf79666450e189f35ec4990311b5564d4e1135668deb0e8ef16bb1f856bd2","runtime_allowlist_sha256":"411e804a7bf862e98c8f968a766e4cf4726be17b0f879b26392f0d0de9b7e498"},"runtime":{"platform":"darwin","architecture":"arm64","node_version":"v24.0.0","node_executable_sha256":"6666666666666666666666666666666666666666666666666666666666666666","isolation_provider_id":"macos-seatbelt.v1","isolation_profile_sha256":"7777777777777777777777777777777777777777777777777777777777777777","allowlist":[{"path":"/opt/codexlooper/bin/runner","sha256":"5555555555555555555555555555555555555555555555555555555555555555","mode":493,"role":"executable"},{"path":"/opt/codexlooper/runtime","sha256":"9999999999999999999999999999999999999999999999999999999999999999","mode":493,"role":"runtime"}]},"credential_policy":{"id":"codexlooper-closerouter-env.v1","type":"closerouter_api_key","required":true,"injection_channel":"child_environment","allowed_environment_key":"CLOSEROUTER_API_KEY"},"replication":{"group":"nw-b","repetition_index":1,"repetition_count":2,"attempt_index":1,"retry_index":0},"ordering":{"seed":"fedcba9876543210fedcba9876543210","sequence_index":1,"sequence_count":2},"cache":{"state":"warm","policy_id":"cell-private-cache.v1"},"workspace":{"fresh":true,"storage_limit_bytes":10485760},"budgets":{"wall_time_ms":60000,"termination_grace_ms":2000,"model_calls":2,"retry_limit":0,"input_tokens":100000,"output_tokens":100000,"reasoning_tokens":100000,"cost_amount":1000000,"cost_currency":"USD","artifact_limit_bytes":10485760},"telemetry":{"allowed_sources":["harness_observed","tool_observed"],"pricing_snapshot_sha256":"8888888888888888888888888888888888888888888888888888888888888888"},"evidence":{"policy_id":"private-evidence.v1"},"results":{"policy_id":"public-result.v2"},"cleanup":{"policy_id":"strict-cleanup.v1"}}
 ~~~
 
-`canonical_config_utf8_sha256=3cdf059666c642e0d17c75dbf28aeef1a972389ffb5b66cd6456d1af8be0fe8c`; `runtime_allowlist_sha256=411e804a7bf862e98c8f968a766e4cf4726be17b0f879b26392f0d0de9b7e498`; `adapter_configuration_sha256=f0b9db40ec8acef8a9f19bfdc9631cf423f283eb5929f79ef393ef6a7a32107f`; `variant_identity_sha256=e272c3bc244d354dbc6b661c1923f268863cc154f8477a6c8a8cd3ba6c702f65`; `configuration_sha256=cdb77efea042e43de8714c5fa6ab2cba347319df5afde5cba1d8692e912bfd9b`; `configuration_cell_sha256=7aa8f727bfd3ba33f55b17d15e2381d59e936cd38d99d6057451b81e827bc363`.
+`canonical_config_utf8_sha256=b530236662d53dfe1ab0486198aec60572c69358209bec8bd63a823beb4932bb`; `runtime_allowlist_sha256=411e804a7bf862e98c8f968a766e4cf4726be17b0f879b26392f0d0de9b7e498`; `adapter_configuration_sha256=e58bf79666450e189f35ec4990311b5564d4e1135668deb0e8ef16bb1f856bd2`; `variant_identity_sha256=1a7dafc5339627f3f2c588fbfee476caf67da973ed9a98b539fdba1ef92fe38b`; `configuration_sha256=29f96822ca65812b11e3dc6a52f3cf097bcecb1cbd707da29c5ef315c83cdc28`; `configuration_cell_sha256=1a5189ee8724f4af777ffb12ec9a6e3a999c8d691dd6fc3395c25005064579c3`.
 
 The changed track, adapter, allowlist, cache policy, replication count, and
 budget cell yield different cell digests. Planning placeholders are never
@@ -917,7 +916,152 @@ it from another row.
 | GB-23 | secret leak | `test/real-run-gate-b-credential.test.mjs` | `test/fixtures/real-run/dummy-secret.mjs` | portable | CI | sentinel credential | fake provider, contract-only, false | true | invalid | completed | PF | redaction evidence, cleanup-attestation.v1 | sentinel scan | no invalid fails | sentinel | yes |
 
 
-| Decision | Options | Repository evidence | Selected option | Remaining proof | Blocking status |
+## Third planning revision — authoritative contract
+
+This section replaces every earlier definition of a digest, provider start,
+event/usage record, evidence publication, ordering, or Gate-B row. Earlier text
+in those subjects is review history only and has no normative force. `blocked`
+means a missing pre-start prerequisite; `invalid` means detected contradictory,
+tampered, or incomplete evidence; `failed` means an intact started *real*
+benchmark candidate whose benchmark outcome is non-passing. A contract fixture is
+not a benchmark candidate and never creates a public benchmark result.
+
+### Acyclic identity derivation
+
+All digest inputs are UTF-8 RFC 8785 bytes and SHA-256. Each named digest field is
+excluded from the canonical object it names. Derive in this order only:
+
+1. raw adapter source files and their `codexlooper.adapter-source-manifest.v1`;
+2. canonical adapter config, whose only child identity is the source-manifest
+   digest, with its schema domain prefix;
+3. `runtime.allowlist` with `codexlooper.real-run-runtime-allowlist.v1`;
+4. the validated real-run config with `codexlooper.real-run-config.v1`;
+5. the explicit `Variant(config)` projection with
+   `codexlooper.variant-identity.v1`;
+6. the explicit nested `Cell(config)` projection with
+   `codexlooper.real-run-configuration-cell.v1`;
+7. immutable provider, event, evidence, manifest, cleanup, and public-result
+   records in their publication order below.
+
+No later record is an input to an earlier record. `Variant(config)` is exactly
+`{schema:"codexlooper.variant-identity.v1",variant:config.variant,runtime:{
+platform,architecture,node_version,node_executable_sha256,isolation_provider_id,
+isolation_profile_sha256,runtime_allowlist_sha256}}`. `Cell(config)` is exactly
+the nested projection specified at lines 256–264. Each schema rejects unknown
+keys, accepts ordinary data only, and validates all child digests before its own
+digest is calculated.
+
+The vector source documents are also literal canonical JSON. Vector A source
+manifest is `{"schema":"codexlooper.adapter-source-manifest.v1","adapter_id":"direct-codex-cli.v1","adapter_version":"v1","entrypoint":"direct-adapter.mjs","source_files":[{"path":"direct-adapter.mjs","mode":420,"sha256":"1111111111111111111111111111111111111111111111111111111111111111"}],"generated_files":[],"renderer_identity_sha256":null}` with digest `8e481ab4696325995cc9a618e2bd36d23f54de89d85cc9f2a836444b37a943c0`.
+Vector A adapter config is the exact-key object identified by
+`codexlooper.adapter-config.direct-codex.v1`, track `controlled_parity`, adapter
+`direct-codex-cli.v1`, that source digest, the entrypoint/executable bytes in
+vector A, version command `["/opt/codex/bin/codex","--version"]`, expected
+`1.0.0`, model `openai/gpt-5.6-terra`, `never`, `workspace-write`, the four
+named policy IDs, and credential policy `direct-codex-openai-env.v1`; its digest
+is `88aa134a850d5169d8348e4a919b0efb279231077dd5ed1fb2ce47243c2f0f46`.
+Vector B source manifest differs only by adapter `codexlooper-terra-sol.v1`,
+entrypoint `runner.mjs`, and source file hash `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`; its digest is
+`327c4bad8bbb488aa8c0609145fd8eb42ff0e5485bf166f4e01ffec205d8c2ce`.
+Vector B config binds that source digest, track `native_workflow`, executable and
+entrypoint bytes in vector B, credential policy `codexlooper-closerouter-env.v1`,
+the exact Terra/Sol identities, non-secret endpoint object, three budgets,
+runtime-manifest, receipt, terminal-event, and telemetry-policy IDs; its digest
+is `e58bf79666450e189f35ec4990311b5564d4e1135668deb0e8ef16bb1f856bd2`.
+Thus all vector digests have published source bytes and no circular dependency.
+
+### Adapter and provider gates
+
+Every adapter config has exactly the universal fields `schema,track,adapter_id,
+source_manifest_sha256,entrypoint_path,entrypoint_sha256,executable_path,
+executable_sha256,expected_version,credential_policy_id,telemetry_policy_id` plus
+the family-specific fields listed earlier; Direct additionally has its exact
+version command and process policies, Ralphex has renderer/INI fields, and
+CodexLooper has its profiles, model identities, endpoint object, budgets,
+selected-task, runtime-manifest, receipt, and terminal policies. Therefore every
+adapter binds track, source manifest, executable, and credential policy. The
+Ralphex JSON-to-INI renderer maps `adapter_id,track` to `[ralphex]`,
+`task_brief_sha256` to `[task]`, and `output_policy,telemetry_policy_id` to
+`[output]`; values are ASCII literal values, no quoting/escaping, each line is
+`key=value\n`, and any value outside ASCII 1–256 is rejected.
+
+`codexlooper.isolation-capability.v1` has exactly `schema,provider_id,
+provider_version,provider_executable_sha256,platform,architecture,boundaries,
+profile_identity_sha256,real_run_eligible,capability_sha256`; `boundaries` is a
+sorted exact-key map whose values are `proved,failed,unsupported,unavailable,
+test_fake_only`. Preparation evidence additionally has exact `status` (`complete`
+only for a real run). Termination snapshots have exactly `snapshot_id,
+monotonic_ms,members,complete`; every member has exactly `pid,ppid,pgid,state,
+start_tvsec,start_tvusec`, and group identity is exact `pgid,leader_identity`.
+The libproc helper retries `proc_listallpids` after allocating the returned size;
+two unequal successive complete enumerations retry up to three times, otherwise
+observation is unavailable and invalid. It records every matching PGID member and
+every known descendant; an escaped or unobserved identity is invalid.
+
+`RealCandidateStart` is true only if a real provider's validated capability,
+prepared launch, and preparation evidence have matching run ID, cell digest,
+provider ID/executable/profile/root binding; every mandatory boundary/check is
+`proved`; eligibility is true; and preparation status is complete. Missing proof
+is `blocked`; contradictory or tampered proof is `invalid`. `fake-isolation.v1`
+always returns false eligibility and cannot be overridden. It may run a contract
+fixture directly in a unit test, but that fixture has `real_candidate_started=false`
+and has no real adapter, tool, public result, or passed benchmark outcome.
+
+### Telemetry, evidence, cleanup, and result binding
+
+Every semantic event is exact-key `schema,run_id,attempt_index,source,
+source_instance_id,sequence,event_id,event_type,monotonic_offset_ms,payload,
+payload_sha256,event_sha256`. Its discriminated payload has a complete schema per
+event type; `exit_code` is null or integer 0–255, `signal` null or an allowlisted
+signal, `deadline_monotonic_ms` 0–3600000, `complete` boolean, and all IDs are
+ASCII 1–64. Usage metrics are always exact-key `value,status,source,
+evidence_sha256`: `observed` requires integer value, non-null source and evidence;
+`unavailable` and `not_applicable` require null value/source/evidence; `invalid`
+requires null value/source and non-null conflict evidence. Payload digest precedes
+event digest; event records precede their private evidence-manifest entry; neither
+digest includes its parent record.
+
+`codexlooper.telemetry-policy.v1` is exact-key `schema,policy_id,adapter_id,
+track,requirements,policy_sha256`; each sorted requirement is exact-key
+`event_type,metric,required,allowed_sources`. It supplies exactly one outcome for
+every adapter/track/metric: a required source missing is invalid, an optional one
+is unavailable, and no result row selects between statuses. The public result
+contains only status, source identity, event/evidence/manifest/cleanup digests and
+the four metric records; it contains no raw payload. It is emitted only after all
+referenced records validate.
+
+Private files use the earlier no-follow exclusive staging rule. The target is
+published only with macOS `renameatx_np(...,RENAME_EXCL)` or an equally atomic
+no-replace primitive; ordinary overwrite-capable rename is forbidden. Lack of a
+no-replace primitive blocks. Publication order is: private event/termination
+evidence → private evidence manifest → cleanup attestation → public result →
+public manifest. Each child references only prior digests; cleanup references the
+manifest digest but excludes `cleanup_sha256` from itself. A `passed` public result
+requires complete private evidence, complete termination evidence, complete
+manifest, complete cleanup attestation, and validated reachable references.
+
+### Schedule and Gate B
+
+Schedule ownership is B1c only. Sort fixture identity, cell digest and variant
+identity by raw digest bytes; seeds are exactly 16 decoded hex bytes; block index
+is zero-based `floor((repetition_index-1)/N)` encoded u32be; the first eight hash
+bytes are unsigned big-endian; `offset=(base_offset+repetition_index-1) mod N`.
+The canonical variant list rotates left by offset. One-variant and incomplete
+blocks use offset zero and existing members. Track and cache cells never mix. This
+formula yields S1/S2 positions already printed above: repetition 1 is `11…11,
+22…22`, repetition 2 is `22…22,11…11`.
+
+The only authoritative Gate-B matrix is a generated specification table: every
+GB-01..GB-23 row uses the full `test/real-run-gate-b-*.test.mjs` and
+`test/fixtures/real-run/*.mjs` paths printed above, but its provider column is
+one of `real macOS provider`, `none`, or `fake contract fixture`. For a fake
+contract fixture the required fields are exactly `real_candidate_started=false`,
+`outcome.status=blocked`, `termination.kind=not_started`, null signal, all usage
+not_applicable, and no public result; the test asserts rejection of
+`RealCandidateStart`. For real macOS provider rows only, candidate_started is
+true and each row declares its exact expected status/termination/evidence. Missing
+or skipped provider proof blocks Gate B. The earlier GB table is withdrawn.
+
 | --- | --- | --- | --- | --- | --- |
 | Result schema | extend v1; separate v2 | v1 requires test data for several pre-start paths | separate `codexlooper.benchmark-result.v2` | B1b parser/matrix | blocks B1b |
 | Real isolation | copy/VM; generic claim; Seatbelt | Phase A is copy/VM; CRG profile is narrow | `macos-seatbelt.v1` only | real allow/deny proof | blocks real runs |
@@ -940,14 +1084,14 @@ authorise implementation, credentials, real adapters, or real model runs.
 
 | Finding | Plan section | Concrete decision | Compatibility or proof artifact | Implementation sprint | Revision status |
 | --- | --- | --- | --- | --- | --- |
-| P1-01 | Canonicalisation | literal valid vectors | vectors A/B and fixed digests | B1a | addressed in second planning revision; independent re-review required |
-| P1-02 | Adapter configuration | config and source manifests | canonical config/INI/manifest digests | B2 | addressed in second planning revision; independent re-review required |
-| P1-03 | IsolationProvider | exact evidence records and gate | capability/preparation/termination/cleanup records | B3 | addressed in second planning revision; independent re-review required |
-| P1-04 | Credential policy | child-environment-only | dummy secret and descendant leak proof | B2/B3 | addressed in second planning revision; independent re-review required |
-| P1-05 | Process observation | libproc snapshots, waitpid, killpg | three-empty-snapshot termination evidence | B3 | addressed in second planning revision; independent re-review required |
-| P2-01 | Events and telemetry | typed payload union | payload/event digests and policy | B4 | addressed in second planning revision; independent re-review required |
-| P2-02 | Result v2 | four metric statuses only | per-row telemetry policy | B1b | addressed in second planning revision; independent re-review required |
-| P2-03 | Evidence operations | exclusive no-follow staging | manifest entry and cleanup evidence | B4 | addressed in second planning revision; independent re-review required |
-| P2-04 | Ordering and cache | defined seeded rotation | S1/S2 schedule vectors | B1c | addressed in second planning revision; independent re-review required |
-| P2-05 | Gate-B matrix | explicit binding columns | named test/fake/evidence matrix | B5 | addressed in second planning revision; independent re-review required |
-| P2-N01 | Sprint ordering | schedule removed from B1a | separate B1c scope | B1c | addressed in second planning revision; independent re-review required |
+| P1-01 | Acyclic identity derivation | explicit nested projections and vector source documents | A/B digest order | B1a | addressed in third planning revision; independent re-review required |
+| P1-02 | Adapter and provider gates | universal adapter bindings and deterministic renderer | source/config/INI identities | B2 | addressed in third planning revision; independent re-review required |
+| P1-03 | Adapter and provider gates | exact capability/preparation and real-start predicate | bound provider evidence | B3 | addressed in third planning revision; independent re-review required |
+| P1-04 | Credential policy | unchanged child-environment-only policy | dummy secret and descendant leak proof | B2/B3 | addressed in third planning revision; independent re-review required |
+| P1-05 | Adapter and provider gates | complete libproc snapshot/retry rule | three-empty-snapshot termination evidence | B3 | addressed in third planning revision; independent re-review required |
+| P2-01 | Telemetry binding | typed payload and conditional-null metric schema | payload/event digests | B4 | addressed in third planning revision; independent re-review required |
+| P2-02 | Telemetry binding | exact per-track telemetry policy | per-metric status requirements | B1b | addressed in third planning revision; independent re-review required |
+| P2-03 | Evidence publication | no-replace atomic publication order | manifest/cleanup chain | B4 | addressed in third planning revision; independent re-review required |
+| P2-04 | Schedule and Gate B | zero-based block and one-based rotation | S1/S2 schedule vectors | B1c | addressed in third planning revision; independent re-review required |
+| P2-05 | Schedule and Gate B | real candidate separate from contract fixture | no-fake-real-run proof | B5 | addressed in third planning revision; independent re-review required |
+| P2-N01 | Sprint ordering | schedule remains B1c only | separate B1c scope | B1c | addressed in third planning revision; independent re-review required |
