@@ -10,9 +10,25 @@
 - Real CloseRouter identity and Codex CLI Responses smoke passed for both models.
 - Nested executable plans are rejected and completed-plan filename collisions are blocked.
 - Rejected Terra builder patches are retained privately for diagnostics.
-- The current complete local regression result is 68 tests passed, 0 failed.
+- The current complete local regression result is 212 tests passed, 0 failed.
 - WP6A Loop Trust Hardening is complete.
 - The original CRG v2.3.6 package is installed and locally proven without graph or model execution.
+
+## WP8 Phase A complete
+
+- The deterministic offline benchmark-fixture harness is complete at
+  implementation commit `0a94275`.
+- Final independent review verdict: **PASS**; no P0, P1, or P2 findings.
+- Benchmark tests: 25 passed, 0 failed. Full suite: 212 passed, 0 failed.
+- CRG review coverage was `PARTIAL` because its graph did not fully include the
+  then-unversioned WP8 files; the final review directly inspected the relevant
+  implementation and test files.
+- Phase A is an offline fixture validator only. Its Node-VM boundary is not an
+  operating-system sandbox; it makes no model calls, has no production agent
+  runner, produces no real benchmark results, and does not prove
+  production-like leakage safety. These are expected limits, not open findings.
+- Next planned WP8 step: separately authorize the deferred real-run
+  configuration and runner work. It has not begun.
 
 ## Core CLI status
 

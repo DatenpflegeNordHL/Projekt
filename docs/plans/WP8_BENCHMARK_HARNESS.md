@@ -1,6 +1,43 @@
 # WP8: Minimal Benchmark Harness
 
-Status: **planning only — not executable by CodexLooper**
+Status: **Phase A complete — deterministic offline fixture validation only**
+
+## Phase A completion record
+
+Phase A is complete at implementation commit `0a94275` and received the
+independent final review verdict **PASS**. It provides:
+
+- a versioned, strict benchmark-result schema and three deterministic Node
+  fixtures;
+- separate public checks, hidden verifiers, and harness-owned reference repairs;
+- an in-memory candidate source map whose tree digest is bound to the exact
+  bytes executed by the separate candidate process;
+- strict path and file contracts, authenticated verifier-result transfer,
+  harness-derived private evidence, and the `not_applicable` offline-usage
+  contract;
+- cleanup in `finally` and bounded workspace, source-map, IPC, and timeout
+  resources.
+
+The final focused benchmark tests passed **25/25** and the full suite passed
+**212/212**. The review graph status was **PARTIAL** because unversioned WP8
+files were not fully represented by CRG during review; the relevant files were
+therefore inspected directly. This is a review-coverage limitation, not a
+remaining Phase-A finding.
+
+### Phase-A boundaries
+
+- This harness is a deterministic offline-fixture validator.
+- The Node-VM boundary is not a general operating-system sandbox.
+- Phase A makes no model calls and provides no production agent runner.
+- Phase A creates no real benchmark results and proves no production-like
+  leakage safety.
+
+These are expected Phase-A limits, not open findings.
+
+### Next planned WP8 step
+
+The next planned WP8 step is the separately authorized real-run configuration
+and runner work described in **Deferred real-run work**. It has not begun.
 
 ## Purpose and scope
 
@@ -471,26 +508,26 @@ private evidence.
 
 ## Implementation tasks
 
-- [ ] Add the strict `benchmark-result.v1` schema/parser and unit tests for
+- [x] Add the strict `benchmark-result.v1` schema/parser and unit tests for
   exact keys, bounds, safe paths, version handling, nullable unavailable
   telemetry, separate cost status/pricing digest, run metadata, and
   invalid/forged outcome combinations.
-- [ ] Add fixture manifests and the three minimal initial Node fixtures with
+- [x] Add fixture manifests and the three minimal initial Node fixtures with
   fixed baseline/success commands and path allowlists.
-- [ ] Add harness-owned reference repair functions and isolation helpers that
+- [x] Add harness-owned reference repair functions and isolation helpers that
   copy only fixture initial state to a temporary workspace.
-- [ ] Add the fixture validator and tests proving baseline failure, reference
+- [x] Add the fixture validator and tests proving baseline failure, reference
   repair success, allowed-path enforcement, canonical workspace-tree hashing,
   separate initial/final/delta identity algorithms and domain separators,
   combined harness identity, private intervention-event derivation, and cleanup.
-- [ ] Add the evaluator and tests proving result fields are derived from the
+- [x] Add the evaluator and tests proving result fields are derived from the
   execution record, unauthorized changes force `invalid`, and direct manual
   result construction cannot be accepted by the public evaluator API. Test all
   four outcome statuses and the fact that an offline result is `not_applicable`,
   never token/cost zero-filled.
-- [ ] Add a narrow npm script only if it invokes the offline validator; do not
-  alter the existing runtime commands or introduce dependencies.
-- [ ] Run focused benchmark tests, `npm run check`, `git diff --check`, and
+- [x] Do not add a narrow npm script: the existing runtime commands remain
+  unchanged and no dependency was introduced.
+- [x] Run focused benchmark tests, `npm run check`, `git diff --check`, and
   `mex check --json` before implementation handoff.
 
 ## Deferred real-run work
