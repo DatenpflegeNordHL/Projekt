@@ -29,7 +29,7 @@ After reviewing and committing the generated scaffold, add a bounded plan under 
 
 ## Current status
 
-The **core local CLI roadmap is complete**.
+The **core local CLI roadmap and hardened local runner are complete**.
 
 - WP0: CloseRouter, Codex, MEX and Ralphex integration verified.
 - WP1: real one-command Terra implementation and Sol review loop verified.
@@ -37,7 +37,16 @@ The **core local CLI roadmap is complete**.
 - WP3: review and repair loop completed inside WP1.
 - WP4: token and cost controls completed inside WP1.
 - WP5: real Terra/Sol and bootstrap pilots completed.
-- WP6: dashboard intentionally deferred as an optional product layer.
+- WP6 trust hardening was merged in PR #7; PR #8 repaired the post-merge CI
+  fixtures without relaxing production validation. The optional Code Review
+  Graph context remains advisory and is not required for normal operation.
+- WP8 Phase A was merged in PR #17. It provides a deterministic offline
+  benchmark harness; real benchmark runs have not started.
+- The only active next work is planning WP8 Phase B. Issue #9 and roadmap Issue
+  #14 are the controlling sources for that work.
+
+An optional dashboard remains a deferred product idea; it is not the meaning of
+WP6.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for evidence and supported versions.
 
