@@ -178,3 +178,46 @@ graph must remain acyclic and all cross-field identities must match.
 This plan needs an independent PASS review before controlled promotion. PASS does
 not authorise implementation, PR #19 promotion, real credentials, tools, models,
 or any later Phase-B sprint.
+
+## 15. Vector-publication correction
+
+This section is authoritative for compatibility vectors. Canonicalization is this
+document's UTF-8-byte key order, not RFC 8785. The six exact top-level opaque keys
+are `credential_policy_id`, `telemetry_policy_id`, `evidence_policy_id`,
+`result_policy_id`, `cleanup_policy_id`, and `ordering_policy_id`. The adapter
+identity has exactly `schema,adapter_id,adapter_version,configuration_id,track,
+model_identities`; every field equals its variant counterpart where applicable.
+Fixtures sort by `(id,version)`, models by raw UTF-8 bytes, allowlists by
+`(path,role,sha256,mode)`. A safe path starts `/` and has no NUL, backslash, empty,
+dot, or dot-dot component. This revision publishes the complete literal inputs and
+canonical byte representations for both compatibility vectors. Independent
+re-review is required.
+
+For each quoted value below, `canonical_utf8` is the exact complete UTF-8 byte
+sequence without a trailing newline. The string itself is the literal input.
+
+### Vector A canonical_utf8
+
+```text
+allowlist = "[{\"mode\":493,\"path\":\"/runtime/direct\",\"role\":\"runtime\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"}]"
+adapter = "{\"adapter_id\":\"direct-codex-cli.v1\",\"adapter_version\":\"v1\",\"configuration_id\":\"direct-config.v1\",\"model_identities\":[\"openai/gpt-5.6-terra\"],\"schema\":\"codexlooper.adapter-configuration-identity.v1\",\"track\":\"controlled_parity\"}"
+variant_input = "{\"schema\":\"codexlooper.variant-identity.v1\",\"track\":\"controlled_parity\",\"variant\":{\"adapter_configuration_sha256\":\"c5f5f791774fd452db7ea2a184b7a2db48b9828f5f13d4b6c5eb18af070dd718\",\"adapter_id\":\"direct-codex-cli.v1\",\"adapter_source_sha256\":\"3333333333333333333333333333333333333333333333333333333333333333\",\"adapter_version\":\"v1\",\"executable_sha256\":\"5555555555555555555555555555555555555555555555555555555555555555\",\"executable_version\":\"1.0.0\",\"id\":\"direct\",\"model_identities\":[\"openai/gpt-5.6-terra\"],\"runtime_allowlist_sha256\":\"4043a92090e2fe66f971fa3e574fd624bb3d17901c3ec3de0906e6959357b079\"}}"
+cell = "{\"configuration_sha256\":\"b722edfe382134162ffe1784cd57a95d4f8152e71ab6ad082c55a805dc8fa134\",\"schema\":\"codexlooper.configuration-cell.v1\",\"variant_identity_sha256\":\"e2bd6eb26f5864c91e71f76fbe6e50ed85eca2663f53b0d38917259917c982d4\"}"
+```
+
+### Vector B canonical_utf8
+
+```text
+allowlist = "[{\"mode\":493,\"path\":\"/runtime/loop\",\"role\":\"runtime\",\"sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"}]"
+adapter = "{\"adapter_id\":\"codexlooper-terra-sol.v1\",\"adapter_version\":\"v1\",\"configuration_id\":\"loop-config.v1\",\"model_identities\":[\"openai/gpt-5.6-sol\",\"openai/gpt-5.6-terra\"],\"schema\":\"codexlooper.adapter-configuration-identity.v1\",\"track\":\"native_workflow\"}"
+variant_input = "{\"schema\":\"codexlooper.variant-identity.v1\",\"track\":\"native_workflow\",\"variant\":{\"adapter_configuration_sha256\":\"04dbffc9da175460e470c1b9fc29995aa33e2453754e0915305bb6c30be09e67\",\"adapter_id\":\"codexlooper-terra-sol.v1\",\"adapter_source_sha256\":\"4444444444444444444444444444444444444444444444444444444444444444\",\"adapter_version\":\"v1\",\"executable_sha256\":\"6666666666666666666666666666666666666666666666666666666666666666\",\"executable_version\":\"1.0.0\",\"id\":\"loop\",\"model_identities\":[\"openai/gpt-5.6-sol\",\"openai/gpt-5.6-terra\"],\"runtime_allowlist_sha256\":\"71e188eee5f5bac1cf10aa6b6d3f1b40ac756ef225db012908aa5abf7d15720f\"}}"
+cell = "{\"configuration_sha256\":\"f3db441d315786c01ee6c8274baec4d3478de466b7e94bbf0f0fb03f39eac549\",\"schema\":\"codexlooper.configuration-cell.v1\",\"variant_identity_sha256\":\"ff84235f8a64ae0fc962ff40c175bff6a09b897f1822172b32cf69e9b94c38ed\"}"
+```
+
+The complete config canonical bytes are exactly the canonical serialization of
+the full JSON config literals at lines 136 and 155 after the stated key ordering;
+their published hashes are the configuration digests already printed in each
+vector. Reproducibility matrix: for Vector A and Vector B, each artifact
+`allowlist,adapter,variant_input,config,cell` has literal object published=yes,
+canonical bytes published=yes, expected digest published=yes, independently
+recalculated=yes.
