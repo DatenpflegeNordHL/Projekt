@@ -149,6 +149,27 @@ function signalProcessGroup(child, signal) {
   }
 }
 
+function processGroupExists(child) {
+  if (!child.pid) return false;
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    if (error.code === "EPERM") return true;
+    throw error;
+  }
+}
+
+async function waitForProcessGroupExit(child, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (processGroupExists(child)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return true;
+}
+
 export async function spawnSupervised(command, args, {
   cwd = process.cwd(),
   env = process.env,
@@ -186,10 +207,18 @@ export async function spawnSupervised(command, args, {
       child.once("error", rejectExit);
       child.once("exit", (code, signal) => {
         if (timedOut) {
-          const error = new Error(`${label} exceeded its duration budget`);
-          error.code = "CODEXLOOPER_BUDGET_DURATION_EXCEEDED";
-          error.signal = signal;
-          rejectExit(error);
+          void waitForProcessGroupExit(child, 5_000).then((groupExited) => {
+            const error = new Error(
+              groupExited
+                ? `${label} exceeded its duration budget`
+                : `${label} process group did not exit after termination`,
+            );
+            error.code = groupExited
+              ? "CODEXLOOPER_BUDGET_DURATION_EXCEEDED"
+              : "CODEXLOOPER_PROCESS_GROUP_DRAIN_TIMEOUT";
+            error.signal = signal;
+            rejectExit(error);
+          }, rejectExit);
           return;
         }
         if (signal) {
