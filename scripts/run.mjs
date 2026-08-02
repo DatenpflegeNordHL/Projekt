@@ -177,6 +177,7 @@ export async function spawnSupervised(command, args, {
   timeoutMs,
   killGraceMs = 2_000,
   label = "Supervised process",
+  startBarrier,
 } = {}) {
   const timeout = positiveInteger(timeoutMs, "Process timeout");
   const grace = positiveInteger(killGraceMs, "Kill grace period");
@@ -186,6 +187,12 @@ export async function spawnSupervised(command, args, {
     stdio,
     detached: true,
   });
+  try {
+    await startBarrier?.(child);
+  } catch (error) {
+    signalProcessGroup(child, "SIGKILL");
+    throw error;
+  }
   let timedOut = false;
   let hardKillTimer = null;
   const signalHandlers = new Map();
