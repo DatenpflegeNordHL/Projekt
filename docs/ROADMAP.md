@@ -1,6 +1,6 @@
 # CodexLooper Roadmap
 
-Status as of **2026-08-05**: core local workflow complete, WP8 Phase A merged, Phase B foundations in progress.
+Status as of **2026-08-06**: core local workflow complete, WP8 Phase A merged, Phase B foundations in progress.
 
 Controlling sources:
 
@@ -139,7 +139,7 @@ The previous all-in-one architecture draft in PR #19 is frozen. It remains usefu
 
 #### Reliability prerequisite
 
-Draft PR #21 addresses process-supervisor shutdown reliability. Its current HEAD contains the startup-synchronisation fix and passes the complete suite locally (`212/212`). The PR remains a draft and must not merge until the current HEAD receives an independent final `PASS`.
+PR #21 is merged after an independent final `PASS`. It contains the startup-synchronisation fix, verified by the complete suite (`212/212`).
 
 #### B1a: Configuration and identity contracts
 
@@ -224,9 +224,7 @@ A later item may begin only after its predecessor has a usable, independently re
 ## Immediate execution order
 
 ```text
-independent final PR #21 code-review PASS
-  -> merge PR #21
-  -> update main
+PR #21 merged after independent final code-review PASS
   -> revalidate PR #20 against updated main
   -> independent PR #20 plan-review PASS
   -> merge and promote B1a plan

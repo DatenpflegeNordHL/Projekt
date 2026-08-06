@@ -51,7 +51,7 @@ Real model benchmark runs are also not active yet. The current benchmark work is
 | Trust hardening and runtime boundaries | Complete |
 | WP8 Phase A deterministic offline benchmark harness | Complete, merged in PR #17 |
 | WP8 Phase B configuration and identity plan, B1a | Draft PR #20, independent re-review pending |
-| Process-supervisor reliability fix | Draft PR #21; current HEAD contains the startup-synchronisation fix and passes 212/212 tests locally; independent final `PASS` pending |
+| Process-supervisor reliability fix | Complete, merged in PR #21 after an independent final `PASS`; the startup-synchronisation fix is verified by 212/212 tests |
 | Real benchmark execution | Blocked until Gate B passes |
 | Dashboard | Optional and deferred |
 
@@ -100,13 +100,12 @@ The current complete suite contains 212 tests on `main`. WP8 Phase A contributes
 
 The immediate need is reliability and proof, not more features:
 
-1. obtain an independent final `PASS` for the current process-supervisor reliability head;
-2. obtain independent `PASS` reviews for the reliability fix and B1a plan;
-3. merge the reliability fix, revalidate B1a against the updated `main`, then merge the plan;
-4. implement B1a configuration and identity contracts;
-5. plan and implement B1b result schema and B1c deterministic scheduling;
-6. continue through adapter, isolation, credential, telemetry, evidence and Gate-B proof work;
-7. run real benchmark pilots only after every required boundary is technically demonstrated.
+1. revalidate B1a against the updated `main` and obtain an independent plan-review `PASS`;
+2. merge and promote the B1a plan;
+3. implement B1a configuration and identity contracts;
+4. plan and implement B1b result schema and B1c deterministic scheduling;
+5. continue through adapter, isolation, credential, telemetry, evidence and Gate-B proof work;
+6. run real benchmark pilots only after every required boundary is technically demonstrated.
 
 Useful contributions are reproducible bug reports, deterministic tests, portability findings for Node 20/22, documentation corrections and review of the currently authorised roadmap scope. New agents, providers or large features are intentionally deferred until the benchmark shows they are justified.
 
