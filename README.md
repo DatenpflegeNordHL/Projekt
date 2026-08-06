@@ -51,7 +51,7 @@ Real model benchmark runs are also not active yet. The current benchmark work is
 | Trust hardening and runtime boundaries | Complete |
 | WP8 Phase A deterministic offline benchmark harness | Complete, merged in PR #17 |
 | WP8 Phase B configuration and identity plan, B1a | Draft PR #20, independent re-review pending |
-| Process-supervisor reliability fix | Draft PR #21, one startup-race finding still open |
+| Process-supervisor reliability fix | Draft PR #21; current HEAD contains the startup-synchronisation fix and passes 212/212 tests locally; independent final `PASS` pending |
 | Real benchmark execution | Blocked until Gate B passes |
 | Dashboard | Optional and deferred |
 
@@ -100,7 +100,7 @@ The current complete suite contains 212 tests on `main`. WP8 Phase A contributes
 
 The immediate need is reliability and proof, not more features:
 
-1. close the remaining startup race in the process-supervisor reliability track;
+1. obtain an independent final `PASS` for the current process-supervisor reliability head;
 2. obtain independent `PASS` reviews for the reliability fix and B1a plan;
 3. merge the reliability fix, revalidate B1a against the updated `main`, then merge the plan;
 4. implement B1a configuration and identity contracts;

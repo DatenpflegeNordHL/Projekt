@@ -139,7 +139,7 @@ The previous all-in-one architecture draft in PR #19 is frozen. It remains usefu
 
 #### Reliability prerequisite
 
-Draft PR #21 addresses a process-supervisor shutdown race. Independent review found the shutdown defect fixed but identified a remaining startup race in the focused test. The PR must not merge until that P1 finding is repaired and the new HEAD receives an independent `PASS`.
+Draft PR #21 addresses process-supervisor shutdown reliability. Its current HEAD contains the startup-synchronisation fix and passes the complete suite locally (`212/212`). The PR remains a draft and must not merge until the current HEAD receives an independent final `PASS`.
 
 #### B1a: Configuration and identity contracts
 
@@ -224,8 +224,7 @@ A later item may begin only after its predecessor has a usable, independently re
 ## Immediate execution order
 
 ```text
-repair PR #21 startup race
-  -> independent PR #21 code-review PASS
+independent final PR #21 code-review PASS
   -> merge PR #21
   -> update main
   -> revalidate PR #20 against updated main
