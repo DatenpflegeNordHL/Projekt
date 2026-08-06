@@ -149,6 +149,27 @@ function signalProcessGroup(child, signal) {
   }
 }
 
+function processGroupExists(child) {
+  if (!child.pid) return false;
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    if (error.code === "EPERM") return true;
+    throw error;
+  }
+}
+
+async function waitForProcessGroupExit(child, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (processGroupExists(child)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return true;
+}
+
 export async function spawnSupervised(command, args, {
   cwd = process.cwd(),
   env = process.env,
@@ -156,6 +177,7 @@ export async function spawnSupervised(command, args, {
   timeoutMs,
   killGraceMs = 2_000,
   label = "Supervised process",
+  startBarrier,
 } = {}) {
   const timeout = positiveInteger(timeoutMs, "Process timeout");
   const grace = positiveInteger(killGraceMs, "Kill grace period");
@@ -165,6 +187,12 @@ export async function spawnSupervised(command, args, {
     stdio,
     detached: true,
   });
+  try {
+    await startBarrier?.(child);
+  } catch (error) {
+    signalProcessGroup(child, "SIGKILL");
+    throw error;
+  }
   let timedOut = false;
   let hardKillTimer = null;
   const signalHandlers = new Map();
@@ -186,10 +214,18 @@ export async function spawnSupervised(command, args, {
       child.once("error", rejectExit);
       child.once("exit", (code, signal) => {
         if (timedOut) {
-          const error = new Error(`${label} exceeded its duration budget`);
-          error.code = "CODEXLOOPER_BUDGET_DURATION_EXCEEDED";
-          error.signal = signal;
-          rejectExit(error);
+          void waitForProcessGroupExit(child, 5_000).then((groupExited) => {
+            const error = new Error(
+              groupExited
+                ? `${label} exceeded its duration budget`
+                : `${label} process group did not exit after termination`,
+            );
+            error.code = groupExited
+              ? "CODEXLOOPER_BUDGET_DURATION_EXCEEDED"
+              : "CODEXLOOPER_PROCESS_GROUP_DRAIN_TIMEOUT";
+            error.signal = signal;
+            rejectExit(error);
+          }, rejectExit);
           return;
         }
         if (signal) {
