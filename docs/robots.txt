@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://datenpflegenordhl.github.io/Codex-Looper/sitemap.xml
