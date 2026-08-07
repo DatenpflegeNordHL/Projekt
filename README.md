@@ -2,6 +2,28 @@
 
 **A local, review-gated development loop for bounded autonomous coding work.**
 
+<p align="center">
+  <img src="docs/assets/codexlooper-hero.jpg" alt="CodexLooper review-gated autonomous coding loop: plan, code, validate, review, and offline benchmark evidence" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/DatenpflegeNordHL/Codex-Looper/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/DatenpflegeNordHL/Codex-Looper/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Node.js 20+" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white">
+  <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache%202.0-blue.svg"></a>
+  <a href="CONTRIBUTING.md"><img alt="Contributing" src="https://img.shields.io/badge/Contributing-guide-2ea44f"></a>
+  <a href="SECURITY.md"><img alt="Security policy" src="https://img.shields.io/badge/Security-policy-8A2BE2"></a>
+</p>
+
+<p align="center">
+  <a href="#bootstrap-a-target-project">Quick start</a> ·
+  <a href="#what-it-can-do-today">Capabilities</a> ·
+  <a href="#current-project-status">Status</a> ·
+  <a href="docs/ROADMAP.md">Roadmap</a> ·
+  <a href="SECURITY.md">Security</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="#documentation">Docs</a>
+</p>
+
 CodexLooper connects project memory, roadmap execution, model-assisted implementation, deterministic validation, independent review and Git evidence in one controlled local workflow.
 
 It is designed for teams and developers who want more automation than a single coding-agent prompt, without handing an AI unrestricted control over the repository or external systems.
@@ -55,7 +77,7 @@ Real model benchmark runs are also not active yet. The current benchmark work is
 | Real benchmark execution | Blocked until Gate B passes |
 | Dashboard | Optional and deferred |
 
-The project is intentionally progressing in small independently reviewed work packages. The older all-in-one Phase-B draft in PR #19 remains frozen and is not an implementation authority.
+The project is intentionally progressing in small independently reviewed work packages. The older all-in-one Phase-B draft in PR #19 is closed and superseded; it remains historical architecture context and is not an implementation authority.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the controlled sequence and evidence gates.
 
