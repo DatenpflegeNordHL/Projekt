@@ -3,7 +3,7 @@
 **A local, review-gated development loop for bounded autonomous coding work.**
 
 <p align="center">
-  <img src="docs/assets/codexlooper-hero.jpg" alt="CodexLooper review-gated autonomous coding loop: plan, code, validate, review, and offline benchmark evidence" width="100%">
+  <img src="docs/assets/codexlooper-hero.svg" alt="CodexLooper review-gated autonomous coding loop: plan, code, validate, review, and offline benchmark evidence" width="100%">
 </p>
 
 <p align="center">
