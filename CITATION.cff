@@ -1,0 +1,20 @@
+cff-version: "1.2.0"
+message: "If you use CodexLooper in published work, please cite the software using these metadata."
+title: "CodexLooper"
+type: software
+abstract: "Open-source, local-first orchestration layer for bounded autonomous AI coding workflows with deterministic validation, independent AI review, and a reproducible offline benchmark harness."
+authors:
+  - name: "DatenpflegeNordHL"
+version: "0.2.0"
+repository-code: "https://github.com/DatenpflegeNordHL/Codex-Looper"
+url: "https://github.com/DatenpflegeNordHL/Codex-Looper"
+license: "Apache-2.0"
+keywords:
+  - "Codex"
+  - "AI coding agent"
+  - "autonomous coding"
+  - "agent orchestration"
+  - "independent AI code review"
+  - "deterministic validation"
+  - "local-first"
+  - "benchmark harness"
