@@ -24,6 +24,8 @@
   <a href="#documentation">Docs</a>
 </p>
 
+CodexLooper is an **open-source, local-first orchestration layer for autonomous AI coding workflows**. It coordinates bounded implementation, deterministic validation, independent AI code review and a reproducible offline benchmark harness around Codex-based development, while keeping push, merge, deployment, publishing and other external side effects outside the autonomous loop.
+
 CodexLooper connects project memory, roadmap execution, model-assisted implementation, deterministic validation, independent review and Git evidence in one controlled local workflow.
 
 It is designed for teams and developers who want more automation than a single coding-agent prompt, without handing an AI unrestricted control over the repository or external systems.
