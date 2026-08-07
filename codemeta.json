@@ -6,12 +6,11 @@
   "codeRepository": "https://github.com/DatenpflegeNordHL/Codex-Looper",
   "issueTracker": "https://github.com/DatenpflegeNordHL/Codex-Looper/issues",
   "license": "https://spdx.org/licenses/Apache-2.0",
-  "softwareVersion": "0.2.0",
+  "version": "0.2.0",
   "dateCreated": "2026-05-14",
   "developmentStatus": "https://www.repostatus.org/#active",
   "programmingLanguage": "JavaScript",
   "runtimePlatform": "Node.js >=20",
-  "applicationCategory": "DeveloperApplication",
   "softwareRequirements": [
     "Node.js >=20",
     "Git",
