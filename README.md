@@ -149,6 +149,8 @@ Useful contributions are reproducible bug reports, deterministic tests, portabil
 - [`docs/architecture/CODEXLOOPER_LOOP_TRUST_INVARIANTS.md`](docs/architecture/CODEXLOOPER_LOOP_TRUST_INVARIANTS.md) — trust boundary
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow
 - [`SECURITY.md`](SECURITY.md) — vulnerability reporting
+- [`codemeta.json`](codemeta.json) — structured machine-readable software metadata
+- [`docs/llms.txt`](docs/llms.txt) — concise machine-readable project summary and capability boundaries
 
 ## License
 
