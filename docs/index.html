@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CodexLooper — Local-first autonomous AI coding orchestration with independent review</title>
+  <meta name="description" content="CodexLooper is an open-source, local-first orchestration layer for bounded autonomous AI coding workflows with deterministic validation, independent AI code review, and a reproducible offline benchmark harness.">
+  <meta name="keywords" content="Codex, Codex CLI, AI coding agent, autonomous coding, coding agent, agent orchestration, agentic workflow, independent AI code review, deterministic validation, local-first, multi-agent, benchmark harness">
+  <meta name="robots" content="index,follow,max-image-preview:large">
+  <link rel="canonical" href="https://datenpflegenordhl.github.io/Codex-Looper/">
+
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="CodexLooper — Review-gated autonomous AI coding loop">
+  <meta property="og:description" content="Local-first autonomous AI coding orchestration with deterministic validation, independent review, and a reproducible offline benchmark harness.">
+  <meta property="og:url" content="https://datenpflegenordhl.github.io/Codex-Looper/">
+  <meta property="og:image" content="https://datenpflegenordhl.github.io/Codex-Looper/assets/codexlooper-hero.svg">
+  <meta property="og:site_name" content="CodexLooper">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="CodexLooper — Review-gated autonomous AI coding loop">
+  <meta name="twitter:description" content="Local-first autonomous AI coding orchestration with deterministic validation and independent AI review.">
+  <meta name="twitter:image" content="https://datenpflegenordhl.github.io/Codex-Looper/assets/codexlooper-hero.svg">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareSourceCode",
+    "name": "CodexLooper",
+    "alternateName": "Codex-Looper",
+    "description": "Open-source, local-first orchestration layer for bounded autonomous AI coding workflows with deterministic validation, independent AI review, and a reproducible offline benchmark harness.",
+    "url": "https://datenpflegenordhl.github.io/Codex-Looper/",
+    "codeRepository": "https://github.com/DatenpflegeNordHL/Codex-Looper",
+    "license": "https://www.apache.org/licenses/LICENSE-2.0",
+    "programmingLanguage": "JavaScript",
+    "runtimePlatform": "Node.js >=20",
+    "version": "0.2.0",
+    "applicationCategory": "DeveloperApplication",
+    "keywords": [
+      "Codex",
+      "Codex CLI",
+      "AI coding agent",
+      "autonomous coding",
+      "coding agent",
+      "agent orchestration",
+      "agentic workflow",
+      "independent AI code review",
+      "deterministic validation",
+      "local-first",
+      "multi-agent",
+      "benchmark harness"
+    ],
+    "author": {
+      "@type": "Organization",
+      "name": "DatenpflegeNordHL",
+      "url": "https://github.com/DatenpflegeNordHL"
+    }
+  }
+  </script>
+
+  <style>
+    :root { color-scheme: dark; --bg:#050914; --panel:#0b1220; --line:#1e3a5f; --text:#e5edf8; --muted:#9fb0c7; --blue:#3b82f6; --cyan:#22d3ee; --green:#34d399; --purple:#8b5cf6; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:radial-gradient(circle at 50% 0%,#0b1730 0,#050914 44%,#030711 100%); color:var(--text); font:16px/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    a { color:#67b8ff; }
+    .wrap { max-width:1120px; margin:0 auto; padding:28px 24px 72px; }
+    .hero { width:100%; border:1px solid #17345c; border-radius:18px; display:block; background:#050914; }
+    h1 { font-size:clamp(2.2rem,7vw,5rem); line-height:1; margin:30px 0 10px; letter-spacing:-.04em; }
+    h1 span { background:linear-gradient(90deg,#f8fafc 0 39%,#2563eb 55%,#22d3ee 100%); -webkit-background-clip:text; color:transparent; }
+    .lead { max-width:850px; font-size:1.2rem; color:#c6d2e3; }
+    .chips { display:flex; flex-wrap:wrap; gap:8px; margin:24px 0 34px; }
+    .chip { border:1px solid #244a76; border-radius:999px; padding:5px 11px; color:#b8d7ff; background:#091324; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:16px; margin:28px 0; }
+    .card { background:rgba(11,18,32,.86); border:1px solid var(--line); border-radius:14px; padding:20px; }
+    .card h2,.card h3 { margin-top:0; }
+    .status { color:var(--green); font-weight:700; }
+    .blocked { color:#c4a7ff; font-weight:700; }
+    nav { display:flex; flex-wrap:wrap; gap:14px; margin:22px 0; }
+    nav a { text-decoration:none; font-weight:650; }
+    code { background:#0b1628; padding:.12em .35em; border-radius:5px; }
+    footer { margin-top:48px; color:var(--muted); border-top:1px solid #14243d; padding-top:22px; }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <img class="hero" src="assets/codexlooper-hero.svg" alt="CodexLooper workflow: plan, code, deterministic validation, independent review, and offline benchmark evidence">
+
+    <h1><span>CodexLooper</span></h1>
+    <p class="lead"><strong>Open-source, local-first orchestration for bounded autonomous AI coding workflows.</strong> CodexLooper coordinates implementation, deterministic validation, independent AI code review and a reproducible offline benchmark harness around Codex-based development.</p>
+
+    <div class="chips" aria-label="Project categories">
+      <span class="chip">AI coding agent orchestration</span>
+      <span class="chip">Codex CLI</span>
+      <span class="chip">deterministic validation</span>
+      <span class="chip">independent AI review</span>
+      <span class="chip">local-first</span>
+      <span class="chip">benchmark harness</span>
+    </div>
+
+    <nav aria-label="Primary links">
+      <a href="https://github.com/DatenpflegeNordHL/Codex-Looper">GitHub repository</a>
+      <a href="../README.md">README</a>
+      <a href="ROADMAP.md">Roadmap</a>
+      <a href="../PROJECT_SPEC.md">Project spec</a>
+      <a href="../SECURITY.md">Security</a>
+      <a href="../CONTRIBUTING.md">Contributing</a>
+    </nav>
+
+    <section class="grid" aria-label="Capabilities">
+      <article class="card">
+        <h2>Bounded coding loop</h2>
+        <p>Runs roadmap-scoped implementation work instead of handing an agent unrestricted repository authority.</p>
+      </article>
+      <article class="card">
+        <h2>Deterministic gates</h2>
+        <p>Uses host-controlled validation, allowed-path checks, runtime integrity, budget limits, Git authority rules and available syntax, test, build and secret checks before work is accepted.</p>
+      </article>
+      <article class="card">
+        <h2>Independent review</h2>
+        <p>Separates implementation and review roles, with Terra as the default builder and Sol as an independent reviewer through the configured CloseRouter path.</p>
+      </article>
+      <article class="card">
+        <h2>Evidence first</h2>
+        <p>Records model identity, usage, estimated cost, Git state and completion evidence while avoiding secrets and full model reasoning.</p>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>Current status</h2>
+      <p><span class="status">WP8 Phase A:</span> deterministic offline benchmark harness complete.</p>
+      <p><span class="blocked">Real model benchmarks:</span> blocked until Gate B proves the required configuration, identity, isolation, credential, telemetry and verifier boundaries.</p>
+      <p>CodexLooper does <strong>not</strong> automatically push, merge, deploy, publish, purchase, contact third parties or modify external accounts.</p>
+    </section>
+
+    <section class="grid" aria-label="Frequently asked questions">
+      <article class="card">
+        <h3>Is CodexLooper an autonomous coding agent?</h3>
+        <p>It is primarily an orchestration and control layer around autonomous coding work. It connects context selection, implementation, deterministic validation, independent review and evidence into a bounded local loop.</p>
+      </article>
+      <article class="card">
+        <h3>Does it run real model benchmarks yet?</h3>
+        <p>No. Real benchmark execution is intentionally blocked until Gate B passes. The current benchmark capability is the deterministic offline harness and its evidence controls.</p>
+      </article>
+      <article class="card">
+        <h3>Is it a cloud service?</h3>
+        <p>No. CodexLooper is designed as a local-first developer tool. External model calls use the explicitly configured provider path; external side effects remain outside the autonomous loop.</p>
+      </article>
+    </section>
+
+    <footer>
+      Apache-2.0 licensed. Source, roadmap and contribution workflow are maintained in the public GitHub repository.
+    </footer>
+  </main>
+</body>
+</html>
