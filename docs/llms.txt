@@ -1,0 +1,35 @@
+# CodexLooper
+
+> CodexLooper is an open-source, local-first orchestration layer for bounded autonomous AI coding workflows. It coordinates roadmap-scoped implementation, deterministic validation, independent AI code review, and a reproducible offline benchmark harness around Codex-based development.
+
+Canonical repository: https://github.com/DatenpflegeNordHL/Codex-Looper
+Project page: https://datenpflegenordhl.github.io/Codex-Looper/
+License: Apache-2.0
+Runtime: Node.js 20+
+
+## Current capabilities
+
+- Non-destructive bootstrap for an existing clean Git repository.
+- Bounded implementation plans executed through a local CodexLooper command.
+- MEX-based context selection.
+- Ralphex orchestration and bounded retries.
+- Terra implementation with Sol as an independent reviewer through the configured CloseRouter path.
+- Host-controlled deterministic validation and patch application.
+- Allowed-path, runtime-integrity, budget, Git-authority, secret, syntax, test and build checks where available.
+- Evidence receipts for model identity, usage, estimated cost, Git state and completion evidence without storing secrets or full model reasoning.
+- Deterministic offline benchmark fixtures through the completed WP8 Phase-A harness.
+
+## Important limits
+
+- Real model benchmark runs are not active yet and remain blocked until Gate B passes.
+- CodexLooper does not automatically push, merge, deploy, publish, purchase, contact third parties or modify external accounts.
+- The project is local-first, not a hosted cloud service.
+
+## Key documents
+
+- README: https://github.com/DatenpflegeNordHL/Codex-Looper/blob/main/README.md
+- Project specification: https://github.com/DatenpflegeNordHL/Codex-Looper/blob/main/PROJECT_SPEC.md
+- Roadmap: https://github.com/DatenpflegeNordHL/Codex-Looper/blob/main/docs/ROADMAP.md
+- Security policy: https://github.com/DatenpflegeNordHL/Codex-Looper/blob/main/SECURITY.md
+- Contributing: https://github.com/DatenpflegeNordHL/Codex-Looper/blob/main/CONTRIBUTING.md
+- CodeMeta: https://github.com/DatenpflegeNordHL/Codex-Looper/blob/main/codemeta.json
