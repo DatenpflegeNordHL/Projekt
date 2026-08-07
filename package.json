@@ -2,6 +2,32 @@
   "name": "codexlooper",
   "version": "0.2.0",
   "private": true,
+  "description": "Local-first orchestration layer for bounded autonomous AI coding workflows with deterministic validation, independent review, and a reproducible offline benchmark harness.",
+  "keywords": [
+    "codex",
+    "codex-cli",
+    "ai-agents",
+    "ai-coding-agent",
+    "coding-agent",
+    "autonomous-coding",
+    "agentic-workflow",
+    "agent-orchestration",
+    "code-review",
+    "developer-tools",
+    "llm",
+    "benchmark",
+    "local-first",
+    "multi-agent"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/DatenpflegeNordHL/Codex-Looper#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DatenpflegeNordHL/Codex-Looper.git"
+  },
+  "bugs": {
+    "url": "https://github.com/DatenpflegeNordHL/Codex-Looper/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=20"
